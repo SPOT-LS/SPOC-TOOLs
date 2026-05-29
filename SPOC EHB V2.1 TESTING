@@ -1,0 +1,2200 @@
+local noop = function() end
+local silentNames = {
+	"print", "warn", "error",
+	"rconsoleprint", "rconsolewarn", "rconsoleerr", "rconsoleinfo", "rconsoleclear", "rconsolename", "rconsoleinput",
+	"rprint", "logprint", "logwarn", "logerror", "loginfo", "logmessage",
+	"consoleprint", "consolewarn", "consoleerr", "consoleinfo", "consoleclear", "consoleinput",
+	"messagebox", "messageboxasync", "notify", "notification",
+}
+local logServiceHooked = false
+local function silenceTarget(target)
+	if type(target) ~= "table" then return end
+	for _, name in ipairs(silentNames) do
+		if type(target[name]) == "function" then
+			target[name] = noop
+		end
+	end
+end
+local function enforceRadioSilence()
+	silenceTarget(_G)
+	silenceTarget(getgenv())
+	silenceTarget(shared)
+	if type(debug) == "table" and type(debug.info) == "function" then
+		debug.info = noop
+	end
+	if not logServiceHooked then
+		game:GetService("LogService").MessageOut:Connect(function() end)
+		logServiceHooked = true
+	end
+end
+enforceRadioSilence()
+task.spawn(function()
+	while true do
+		task.wait(3)
+		enforceRadioSilence()
+	end
+end)
+
+local PlayersService = game:GetService("Players")
+local RunService = game:GetService("RunService")
+local UserInputService = game:GetService("UserInputService")
+local Workspace = game:GetService("Workspace")
+local TweenService = game:GetService("TweenService")
+local GuiService = game:GetService("GuiService")
+local HttpService = game:GetService("HttpService")
+local LocalPlayer = PlayersService.LocalPlayer
+local Camera = Workspace.CurrentCamera
+local Lighting = game:GetService("Lighting")
+
+local WHITELIST_FILE = "SPOC_EHB_Whitelist.json"
+local SETTINGS_FILE = "SPOC_EHB_Settings.json"
+local DISPLAY_ORDER = 2147483647
+
+local GUI_PARENT = game:GetService("CoreGui")
+
+_G.SPOC_EHB_ACTIVE = _G.SPOC_EHB_ACTIVE or {}
+
+local function hasExistingInstance()
+	for _, gui in ipairs(LocalPlayer.PlayerGui:GetChildren()) do
+		if gui:IsA("ScreenGui") and gui.Name:sub(1, 4) == "SPOC" then
+			return true
+		end
+	end
+	for _, gui in ipairs(game:GetService("CoreGui"):GetChildren()) do
+		if gui:IsA("ScreenGui") and gui.Name:sub(1, 4) == "SPOC" then
+			return true
+		end
+	end
+	for _ in pairs(_G.SPOC_EHB_ACTIVE) do
+		return true
+	end
+	return false
+end
+
+local function showMultiExecConfirm()
+	local choice = nil
+	local confirmGui = Instance.new("ScreenGui")
+	confirmGui.Name = "SPOC_Confirm"
+	confirmGui.ResetOnSpawn = false
+	confirmGui.DisplayOrder = DISPLAY_ORDER
+	confirmGui.ZIndexBehavior = Enum.ZIndexBehavior.Sibling
+	confirmGui.Parent = GUI_PARENT
+	local overlay = Instance.new("Frame")
+	overlay.Size = UDim2.new(1, 0, 1, 0)
+	overlay.BackgroundColor3 = Color3.fromRGB(0, 0, 0)
+	overlay.BackgroundTransparency = 0.4
+	overlay.BorderSizePixel = 0
+	overlay.ZIndex = 1
+	overlay.Parent = confirmGui
+	local box = Instance.new("Frame")
+	box.AnchorPoint = Vector2.new(0.5, 0.5)
+	box.Position = UDim2.new(0.5, 0, 0.5, 0)
+	box.Size = UDim2.new(0, 320, 0, 120)
+	box.BackgroundColor3 = Color3.fromRGB(40, 40, 40)
+	box.BorderSizePixel = 0
+	box.ZIndex = 2
+	box.Parent = confirmGui
+	local boxCorner = Instance.new("UICorner")
+	boxCorner.CornerRadius = UDim.new(0.08, 0)
+	boxCorner.Parent = box
+	local msg = Instance.new("TextLabel")
+	msg.Size = UDim2.new(1, -20, 0, 60)
+	msg.Position = UDim2.new(0, 10, 0, 15)
+	msg.BackgroundTransparency = 1
+	msg.Font = Enum.Font.TitilliumWeb
+	msg.Text = "Script already running.\nExecute again?"
+	msg.TextColor3 = Color3.fromRGB(255, 255, 255)
+	msg.TextScaled = true
+	msg.TextWrapped = true
+	msg.ZIndex = 3
+	msg.Parent = box
+	local yesBtn = Instance.new("TextButton")
+	yesBtn.Size = UDim2.new(0.4, 0, 0, 25)
+	yesBtn.Position = UDim2.new(0.08, 0, 1, -40)
+	yesBtn.BackgroundColor3 = Color3.fromRGB(0, 150, 0)
+	yesBtn.BorderSizePixel = 0
+	yesBtn.Font = Enum.Font.TitilliumWeb
+	yesBtn.Text = "Confirm"
+	yesBtn.TextColor3 = Color3.fromRGB(255, 255, 255)
+	yesBtn.TextScaled = true
+	yesBtn.ZIndex = 3
+	yesBtn.Parent = box
+	local yesCorner = Instance.new("UICorner")
+	yesCorner.CornerRadius = UDim.new(0.2, 0)
+	yesCorner.Parent = yesBtn
+	local noBtn = Instance.new("TextButton")
+	noBtn.Size = UDim2.new(0.4, 0, 0, 25)
+	noBtn.Position = UDim2.new(0.52, 0, 1, -40)
+	noBtn.BackgroundColor3 = Color3.fromRGB(150, 0, 0)
+	noBtn.BorderSizePixel = 0
+	noBtn.Font = Enum.Font.TitilliumWeb
+	noBtn.Text = "Cancel"
+	noBtn.TextColor3 = Color3.fromRGB(255, 255, 255)
+	noBtn.TextScaled = true
+	noBtn.ZIndex = 3
+	noBtn.Parent = box
+	local noCorner = Instance.new("UICorner")
+	noCorner.CornerRadius = UDim.new(0.2, 0)
+	noCorner.Parent = noBtn
+	yesBtn.MouseButton1Click:Connect(function()
+		choice = true
+		confirmGui:Destroy()
+	end)
+	noBtn.MouseButton1Click:Connect(function()
+		choice = false
+		confirmGui:Destroy()
+	end)
+	while choice == nil do
+		task.wait()
+	end
+	return choice
+end
+
+if hasExistingInstance() then
+	if not showMultiExecConfirm() then
+		return
+	end
+end
+
+local instanceToken = HttpService:GenerateGUID(false)
+_G.SPOC_EHB_ACTIVE[instanceToken] = true
+
+task.wait(1)
+
+local Script_Title = "SPOC EHB V2.1 <font color=\"rgb(28, 27, 27)\">|</font> Extended-Hitbox"
+
+local SPOC = Instance.new("ScreenGui")
+local Main = Instance.new("Frame")
+local UICorner = Instance.new("UICorner")
+local Intro = Instance.new("Frame")
+local UICorner_2 = Instance.new("UICorner")
+local Logo = Instance.new("ImageButton")
+local UIAspectRatioConstraint = Instance.new("UIAspectRatioConstraint")
+local Title = Instance.new("TextLabel")
+local Menu = Instance.new("ScrollingFrame")
+local UIListLayout = Instance.new("UIListLayout")
+local Toggle = Instance.new("ImageButton")
+local UICorner_3 = Instance.new("UICorner")
+local Enabled = Instance.new("Frame")
+local UIAspectRatioConstraint_2 = Instance.new("UIAspectRatioConstraint")
+local UICorner_4 = Instance.new("UICorner")
+local Check = Instance.new("Frame")
+local UIAspectRatioConstraint_3 = Instance.new("UIAspectRatioConstraint")
+local UICorner_5 = Instance.new("UICorner")
+local Name = Instance.new("TextLabel")
+local UIGradient = Instance.new("UIGradient")
+local Button = Instance.new("ImageButton")
+local UICorner_6 = Instance.new("UICorner")
+local Name_2 = Instance.new("TextLabel")
+local UIGradient_2 = Instance.new("UIGradient")
+local tab = Instance.new("Frame")
+local Close = Instance.new("TextButton")
+local ComboElem = Instance.new("ImageButton")
+local UICorner_7 = Instance.new("UICorner")
+local Name_3 = Instance.new("TextLabel")
+local UIGradient_3 = Instance.new("UIGradient")
+local Img = Instance.new("TextLabel")
+local UIAspectRatioConstraint_4 = Instance.new("UIAspectRatioConstraint")
+local ComboBox = Instance.new("ImageButton")
+local UICorner_8 = Instance.new("UICorner")
+local Name_4 = Instance.new("TextLabel")
+local UIGradient_4 = Instance.new("UIGradient")
+local Img_2 = Instance.new("TextLabel")
+local UIAspectRatioConstraint_5 = Instance.new("UIAspectRatioConstraint")
+local Slider = Instance.new("Frame")
+local UICorner_9 = Instance.new("UICorner")
+local SliderBar = Instance.new("Frame")
+local UICorner_10 = Instance.new("UICorner")
+local SliderButton = Instance.new("TextButton")
+local SliderName = Instance.new("TextLabel")
+
+local WhitelistButton = Instance.new("TextButton")
+local WhitelistFrame = Instance.new("ScrollingFrame")
+local WhitelistUIListLayout = Instance.new("UIListLayout")
+
+SPOC.Name = "SPOC_" .. instanceToken:sub(1, 8)
+SPOC.Enabled = true
+SPOC.ResetOnSpawn = false
+SPOC.ZIndexBehavior = Enum.ZIndexBehavior.Sibling
+SPOC.DisplayOrder = DISPLAY_ORDER
+SPOC.Parent = GUI_PARENT
+
+Main.Name = "Main"
+Main.Parent = SPOC
+Main.Active = true
+Main.Draggable = true
+Main.AnchorPoint = Vector2.new(0.5, 0.5)
+Main.BackgroundColor3 = Color3.fromRGB(40, 40, 40)
+Main.BorderSizePixel = 0
+Main.Position = UDim2.new(0.5, 0, -0.5, 0)
+Main.Size = UDim2.new(0.35, 0, 0.5, 0)
+Main.ZIndex = 10
+
+UICorner.CornerRadius = UDim.new(0.05, 0)
+UICorner.Parent = Main
+
+Intro.Name = "Intro"
+Intro.Parent = Main
+Intro.BackgroundColor3 = Color3.fromRGB(40, 40, 40)
+Intro.ClipsDescendants = true
+Intro.Size = UDim2.new(1, 0, 1, 0)
+Intro.ZIndex = 10
+
+UICorner_2.CornerRadius = UDim.new(0.05, 0)
+UICorner_2.Parent = Intro
+
+Logo.Parent = Intro
+Logo.AnchorPoint = Vector2.new(0.5, 0.5)
+Logo.BackgroundColor3 = Color3.fromRGB(255, 255, 255)
+Logo.BackgroundTransparency = 1
+Logo.BorderSizePixel = 0
+Logo.Position = UDim2.new(0.5, 0, 0.5, 0)
+Logo.Size = UDim2.new(0.75, 0, 0.75, 0)
+Logo.ZIndex = 11
+Logo.Image = "http://www.roblox.com/asset/?id=104555055238984"
+Logo.ScaleType = Enum.ScaleType.Fit
+Logo.Active = true
+
+UIAspectRatioConstraint.Parent = Logo
+
+Title.Name = "Title"
+Title.Parent = Main
+Title.AnchorPoint = Vector2.new(0, 0.5)
+Title.BackgroundColor3 = Color3.fromRGB(255, 255, 255)
+Title.BackgroundTransparency = 1
+Title.BorderSizePixel = 0
+Title.Position = UDim2.new(0.17, 0, 0.085, 0)
+Title.Size = UDim2.new(0.7, 0, 0.12, 0)
+Title.Font = Enum.Font.TitilliumWeb
+Title.FontFace = Font.new("rbxasset://fonts/families/TitilliumWeb.json", Enum.FontWeight.Bold)
+Title.RichText = true
+Title.Text = Script_Title
+Title.TextColor3 = Color3.fromRGB(255, 255, 255)
+Title.TextScaled = true
+Title.TextSize = 14
+Title.TextWrapped = true
+Title.TextXAlignment = Enum.TextXAlignment.Left
+Title.TextYAlignment = Enum.TextYAlignment.Center
+Title.Visible = false
+Title.ZIndex = 12
+
+Menu.Name = "Menu"
+Menu.Parent = Main
+Menu.Active = true
+Menu.AnchorPoint = Vector2.new(0.5, 1)
+Menu.BackgroundColor3 = Color3.fromRGB(255, 255, 255)
+Menu.BackgroundTransparency = 1
+Menu.AutomaticCanvasSize = Enum.AutomaticSize.Y
+Menu.BorderSizePixel = 0
+Menu.Position = UDim2.new(0.5, 0, 0.98, 0)
+Menu.Size = UDim2.new(0.95, 0, 0.82, 0)
+Menu.CanvasSize = UDim2.new(0, 0, 0, 0)
+Menu.ScrollBarImageColor3 = Color3.fromRGB(255, 255, 255)
+Menu.ScrollBarThickness = Menu.AbsoluteSize.X/25
+Menu.Visible = false
+Menu.ZIndex = 12
+
+UIListLayout.Parent = Menu
+UIListLayout.SortOrder = Enum.SortOrder.LayoutOrder
+UIListLayout.Padding = UDim.new(0, 2)
+
+Toggle.Name = "Toggle"
+Toggle.Visible = false
+Toggle.BackgroundColor3 = Color3.fromRGB(55, 55, 55)
+Toggle.Size = UDim2.new(0.95, 0, 0, 25)
+
+UICorner_3.CornerRadius = UDim.new(0.25, 0)
+UICorner_3.Parent = Toggle
+
+Enabled.Name = "Enabled"
+Enabled.Parent = Toggle
+Enabled.AnchorPoint = Vector2.new(1, 0.5)
+Enabled.BackgroundColor3 = Color3.fromRGB(50, 50, 50)
+Enabled.Position = UDim2.new(0.975, 0, 0.5, 0)
+Enabled.Size = UDim2.new(0.75, 0, 0.75, 0)
+
+UIAspectRatioConstraint_2.Parent = Enabled
+
+UICorner_4.CornerRadius = UDim.new(0.3, 0)
+UICorner_4.Parent = Enabled
+
+Check.Name = "Check"
+Check.Parent = Enabled
+Check.AnchorPoint = Vector2.new(0.5, 0.5)
+Check.BackgroundColor3 = Color3.fromRGB(28, 27, 27)
+Check.Position = UDim2.new(0.5, 0, 0.5, 0)
+Check.Size = UDim2.new(0.65, 0, 0.65, 0)
+
+UIAspectRatioConstraint_3.Parent = Check
+
+UICorner_5.CornerRadius = UDim.new(0.3, 0)
+UICorner_5.Parent = Check
+
+Name.Name = "Name"
+Name.Parent = Toggle
+Name.AnchorPoint = Vector2.new(0, 0.5)
+Name.BackgroundColor3 = Color3.fromRGB(255, 255, 255)
+Name.BackgroundTransparency = 1
+Name.BorderSizePixel = 0
+Name.Position = UDim2.new(0.05, 0, 0.5, 0)
+Name.Size = UDim2.new(0.75, 0, 0.8, 0)
+Name.Font = Enum.Font.TitilliumWeb
+Name.Text = "Script"
+Name.TextColor3 = Color3.fromRGB(255, 255, 255)
+Name.TextScaled = true
+Name.TextSize = 14
+Name.TextWrapped = true
+Name.TextXAlignment = Enum.TextXAlignment.Left
+Name.TextYAlignment = Enum.TextYAlignment.Bottom
+
+UIGradient.Color = ColorSequence.new{ColorSequenceKeypoint.new(0.00, Color3.fromRGB(255, 255, 255)), ColorSequenceKeypoint.new(1.00, Color3.fromRGB(180, 180, 180))}
+UIGradient.Parent = Toggle
+
+Button.Name = "Button"
+Button.BackgroundColor3 = Color3.fromRGB(55, 55, 55)
+Button.Size = UDim2.new(0.95, 0, 0, 25)
+
+UICorner_6.CornerRadius = UDim.new(0.25, 0)
+UICorner_6.Parent = Button
+
+Name_2.Name = "Name"
+Name_2.Parent = Button
+Name_2.AnchorPoint = Vector2.new(0, 0.5)
+Name_2.BackgroundColor3 = Color3.fromRGB(255, 255, 255)
+Name_2.BackgroundTransparency = 1
+Name_2.BorderSizePixel = 0
+Name_2.Position = UDim2.new(0.05, 0, 0.5, 0)
+Name_2.Size = UDim2.new(0.95, 0, 0.82, 0)
+Name_2.Font = Enum.Font.TitilliumWeb
+Name_2.Text = "Enabled"
+Name_2.TextColor3 = Color3.fromRGB(255, 255, 255)
+Name_2.TextScaled = true
+Name_2.TextSize = 14
+Name_2.TextWrapped = true
+Name_2.TextXAlignment = Enum.TextXAlignment.Left
+Name_2.TextYAlignment = Enum.TextYAlignment.Bottom
+
+UIGradient_2.Color = ColorSequence.new{ColorSequenceKeypoint.new(0.00, Color3.fromRGB(255, 255, 255)), ColorSequenceKeypoint.new(1.00, Color3.fromRGB(180, 180, 180))}
+UIGradient_2.Parent = Button
+
+tab.Name = "Tab"
+tab.Visible = false
+tab.BackgroundTransparency = 1
+tab.Size = UDim2.new(0.95, 0, 0.025, 0)
+
+Close.Name = "Close"
+Close.BackgroundColor3 = Color3.fromRGB(255, 255, 255)
+Close.BackgroundTransparency = 1
+Close.BorderSizePixel = 0
+Close.Position = UDim2.new(0.85, 0, 0.02, 0)
+Close.Size = UDim2.new(0.12, 0, 0.1, 0)
+Close.Font = Enum.Font.FredokaOne
+Close.Text = "X"
+Close.TextColor3 = Color3.fromRGB(28, 27, 27)
+Close.TextScaled = true
+Close.TextSize = 14
+Close.TextWrapped = true
+Close.TextXAlignment = Enum.TextXAlignment.Right
+Close.Parent = Main
+Close.Visible = false
+Close.ZIndex = 15
+
+ComboElem.Name = "ComboElem"
+ComboElem.BackgroundColor3 = Color3.fromRGB(55, 55, 55)
+ComboElem.Size = UDim2.new(0.95, 0, 0, 25)
+
+UICorner_7.CornerRadius = UDim.new(0.25, 0)
+UICorner_7.Parent = ComboElem
+
+Name_3.Name = "Name"
+Name_3.Parent = ComboElem
+Name_3.AnchorPoint = Vector2.new(0, 0.5)
+Name_3.BackgroundColor3 = Color3.fromRGB(255, 255, 255)
+Name_3.BackgroundTransparency = 1
+Name_3.BorderSizePixel = 0
+Name_3.Position = UDim2.new(0.05, 0, 0.5, 0)
+Name_3.Size = UDim2.new(0.75, 0, 0.8, 0)
+Name_3.Font = Enum.Font.TitilliumWeb
+Name_3.Text = "Enabled"
+Name_3.TextColor3 = Color3.fromRGB(28, 27, 27)
+Name_3.TextScaled = true
+Name_3.TextSize = 14
+Name_3.TextWrapped = true
+Name_3.TextXAlignment = Enum.TextXAlignment.Left
+Name_3.TextYAlignment = Enum.TextYAlignment.Bottom
+
+UIGradient_3.Color = ColorSequence.new{ColorSequenceKeypoint.new(0.00, Color3.fromRGB(255, 255, 255)), ColorSequenceKeypoint.new(1.00, Color3.fromRGB(180, 180, 180))}
+UIGradient_3.Rotation = 180
+UIGradient_3.Parent = ComboElem
+
+Img.Name = "Img"
+Img.Parent = ComboElem
+Img.AnchorPoint = Vector2.new(1, 0.5)
+Img.BackgroundColor3 = Color3.fromRGB(255, 255, 255)
+Img.BackgroundTransparency = 1
+Img.BorderSizePixel = 0
+Img.Position = UDim2.new(0.975, 0, 0.5, 0)
+Img.Rotation = 90
+Img.Size = UDim2.new(0.75, 0, 0.75, 0)
+Img.Font = Enum.Font.FredokaOne
+Img.Text = "^"
+Img.TextColor3 = Color3.fromRGB(255, 255, 255)
+Img.TextScaled = true
+Img.TextSize = 14
+Img.TextWrapped = true
+
+UIAspectRatioConstraint_4.Parent = Img
+
+ComboBox.Name = "ComboBox"
+ComboBox.BackgroundColor3 = Color3.fromRGB(55, 55, 55)
+ComboBox.Size = UDim2.new(0.95, 0, 0, 25)
+
+UICorner_8.CornerRadius = UDim.new(0.25, 0)
+UICorner_8.Parent = ComboBox
+
+Name_4.Name = "Name"
+Name_4.Parent = ComboBox
+Name_4.AnchorPoint = Vector2.new(0, 0.5)
+Name_4.BackgroundColor3 = Color3.fromRGB(255, 255, 255)
+Name_4.BackgroundTransparency = 1.000
+Name_4.BorderSizePixel = 0
+Name_4.Position = UDim2.new(0.05, 0, 0.5, 0)
+Name_4.Size = UDim2.new(0.75, 0, 0.8, 0)
+Name_4.Font = Enum.Font.TitilliumWeb
+Name_4.Text = "Enabled"
+Name_4.TextColor3 = Color3.fromRGB(255, 255, 255)
+Name_4.TextScaled = true
+Name_4.TextSize = 14
+Name_4.TextWrapped = true
+Name_4.TextXAlignment = Enum.TextXAlignment.Left
+Name_4.TextYAlignment = Enum.TextYAlignment.Bottom
+
+UIGradient_4.Color = ColorSequence.new{ColorSequenceKeypoint.new(0.00, Color3.fromRGB(255, 255, 255)), ColorSequenceKeypoint.new(1.00, Color3.fromRGB(180, 180, 180))}
+UIGradient_4.Parent = ComboBox
+
+Img_2.Name = "Img"
+Img_2.Parent = ComboBox
+Img_2.AnchorPoint = Vector2.new(1, 0.5)
+Img_2.BackgroundColor3 = Color3.fromRGB(255, 255, 255)
+Img_2.BackgroundTransparency = 1
+Img_2.BorderSizePixel = 0
+Img_2.Rotation = 180
+Img_2.Position = UDim2.new(0.975, 0, 0.5, 0)
+Img_2.Size = UDim2.new(0.75, 0, 0.75, 0)
+Img_2.Font = Enum.Font.FredokaOne
+Img_2.Text = "^"
+Img_2.TextColor3 = Color3.fromRGB(28, 27, 27)
+Img_2.TextScaled = true
+Img_2.TextSize = 14
+Img_2.TextWrapped = true
+
+UIAspectRatioConstraint_5.Parent = Img_2
+
+Slider.Name = "Slider"
+Slider.Visible = false
+Slider.BackgroundColor3 = Color3.fromRGB(55, 55, 55)
+Slider.Size = UDim2.new(0.95, 0, 0, 25)
+
+UICorner_9.CornerRadius = UDim.new(0.25, 0)
+UICorner_9.Parent = Slider
+
+SliderBar.Name = "SliderBar"
+SliderBar.Parent = Slider
+SliderBar.AnchorPoint = Vector2.new(0.5, 0.5)
+SliderBar.BackgroundColor3 = Color3.fromRGB(80, 80, 80)
+SliderBar.Position = UDim2.new(0.5, 0, 0.7, 0)
+SliderBar.Size = UDim2.new(0.9, 0, 0.22, 0)
+
+UICorner_10.CornerRadius = UDim.new(0.5, 0)
+UICorner_10.Parent = SliderBar
+
+SliderButton.Name = "SliderButton"
+SliderButton.Parent = SliderBar
+SliderButton.AnchorPoint = Vector2.new(0.5, 0.5)
+SliderButton.BackgroundColor3 = Color3.fromRGB(255, 255, 255)
+SliderButton.Size = UDim2.new(0.12, 0, 2.5, 0)
+SliderButton.Text = ""
+
+SliderName.Name = "SliderName"
+SliderName.Parent = Slider
+SliderName.AnchorPoint = Vector2.new(0, 0.5)
+SliderName.BackgroundColor3 = Color3.fromRGB(255, 255, 255)
+SliderName.BackgroundTransparency = 1
+SliderName.BorderSizePixel = 0
+SliderName.Position = UDim2.new(0.05, 0, 0.25, 0)
+SliderName.Size = UDim2.new(0.9, 0, 0.5, 0)
+SliderName.Font = Enum.Font.TitilliumWeb
+SliderName.Text = "Slider"
+SliderName.TextColor3 = Color3.fromRGB(255, 255, 255)
+SliderName.TextScaled = true
+SliderName.TextSize = 14
+SliderName.TextWrapped = true
+SliderName.TextXAlignment = Enum.TextXAlignment.Left
+SliderName.TextYAlignment = Enum.TextYAlignment.Bottom
+
+WhitelistButton.Name = "WhitelistButton"
+WhitelistButton.Parent = SPOC
+WhitelistButton.BackgroundColor3 = Color3.fromRGB(55, 55, 55)
+WhitelistButton.BorderSizePixel = 0
+WhitelistButton.Position = UDim2.new(0.5, 0, 0.5, 0)
+WhitelistButton.Size = UDim2.new(0, 120, 0, 25)
+WhitelistButton.Font = Enum.Font.TitilliumWeb
+WhitelistButton.Text = "Whitelist ▼"
+WhitelistButton.TextColor3 = Color3.fromRGB(255, 255, 255)
+WhitelistButton.TextScaled = true
+WhitelistButton.TextSize = 14
+WhitelistButton.TextWrapped = true
+WhitelistButton.Visible = false
+WhitelistButton.ZIndex = 1000
+
+WhitelistFrame.Name = "WhitelistFrame"
+WhitelistFrame.Parent = WhitelistButton
+WhitelistFrame.BackgroundColor3 = Color3.fromRGB(70, 70, 70)
+WhitelistFrame.BorderSizePixel = 0
+WhitelistFrame.Position = UDim2.new(0, 0, 1, 5)
+WhitelistFrame.Size = UDim2.new(1, 0, 0, 200)
+WhitelistFrame.CanvasSize = UDim2.new(0, 0, 0, 0)
+WhitelistFrame.ScrollBarThickness = 10
+WhitelistFrame.ScrollingDirection = Enum.ScrollingDirection.Y
+WhitelistFrame.Visible = false
+WhitelistFrame.ZIndex = 1001
+
+WhitelistUIListLayout.Parent = WhitelistFrame
+WhitelistUIListLayout.SortOrder = Enum.SortOrder.LayoutOrder
+WhitelistUIListLayout.Padding = UDim.new(0, 2)
+
+local function load_whitelist()
+	return {}
+end
+
+local function save_whitelist(list)
+end
+
+local function colorToTable(color)
+	return {
+		math.floor(color.R * 255 + 0.5),
+		math.floor(color.G * 255 + 0.5),
+		math.floor(color.B * 255 + 0.5),
+	}
+end
+
+local function tableToColor(data, fallback)
+	if type(data) == "table" and type(data[1]) == "number" and type(data[2]) == "number" and type(data[3]) == "number" then
+		return Color3.fromRGB(
+			math.clamp(math.floor(data[1]), 0, 255),
+			math.clamp(math.floor(data[2]), 0, 255),
+			math.clamp(math.floor(data[3]), 0, 255)
+		)
+	end
+	return fallback
+end
+
+local function normalizeColorTable(data, fallback)
+	local color = tableToColor(data, fallback)
+	return colorToTable(color)
+end
+
+local function load_settings()
+	local defaults = {
+		esp_wall_color_enabled = true,
+		esp_wall_color_1 = {255, 128, 0},
+		esp_wall_color_2 = {0, 255, 0},
+	}
+	return defaults
+end
+
+local function save_settings(settings)
+end
+
+local saved_settings = load_settings()
+local persisted_settings = {
+	esp_wall_color_enabled = saved_settings.esp_wall_color_enabled ~= false,
+	esp_wall_color_1 = saved_settings.esp_wall_color_1,
+	esp_wall_color_2 = saved_settings.esp_wall_color_2,
+}
+
+save_settings(persisted_settings)
+
+local hitbox_whitelist = load_whitelist()
+local whitelist_lookup = {}
+for _, uid in ipairs(hitbox_whitelist) do
+	whitelist_lookup[uid] = true
+end
+
+local function is_whitelisted(userId)
+	return whitelist_lookup[userId] == true
+end
+
+local function add_to_whitelist(userId)
+	if not whitelist_lookup[userId] then
+		table.insert(hitbox_whitelist, userId)
+		whitelist_lookup[userId] = true
+		save_whitelist(hitbox_whitelist)
+	end
+end
+
+local function remove_from_whitelist(userId)
+	if whitelist_lookup[userId] then
+		whitelist_lookup[userId] = nil
+		local idx = table.find(hitbox_whitelist, userId)
+		if idx then
+			table.remove(hitbox_whitelist, idx)
+		end
+		save_whitelist(hitbox_whitelist)
+	end
+end
+
+Close.MouseButton1Click:Connect(function()
+	Intro.BackgroundTransparency = 0
+	Intro.ZIndex = 10
+	Logo.Active = false
+	Logo:TweenSizeAndPosition(
+		UDim2.fromScale(0.75, 0.75),
+		UDim2.fromScale(0.5, 0.5),
+		Enum.EasingDirection.Out,
+		Enum.EasingStyle.Quad,
+		0.3,
+		true
+	)
+	for _, obj in pairs(Main:GetChildren()) do
+		if obj:IsA("GuiObject") and obj ~= Intro and obj ~= Logo then
+			obj.Visible = false
+		end
+	end
+	WhitelistButton.Visible = false
+	WhitelistFrame.Visible = false
+	WhitelistButton.Text = "Whitelist ▼"
+	task.wait(0.3)
+	Main:TweenSize(
+		UDim2.fromScale(0.1, 0.175),
+		Enum.EasingDirection.Out,
+		Enum.EasingStyle.Quad,
+		0.3,
+		true
+	)
+	task.wait(0.3)
+	TweenService:Create(Logo, TweenInfo.new(0.3), {ImageTransparency = 0.8}):Play()
+	TweenService:Create(Intro, TweenInfo.new(0.3), {BackgroundTransparency = 1}):Play()
+	TweenService:Create(Main, TweenInfo.new(0.3), {BackgroundTransparency = 0.8}):Play()
+	task.wait(0.3)
+	Logo.Active = true
+end)
+
+Logo.MouseButton1Click:Connect(function()
+	if not Logo.Active then return end
+	Logo.Active = false
+	TweenService:Create(Logo, TweenInfo.new(0.2), {ImageTransparency = 0}):Play()
+	TweenService:Create(Intro, TweenInfo.new(0.2), {BackgroundTransparency = 0}):Play()
+	TweenService:Create(Main, TweenInfo.new(0.2), {BackgroundTransparency = 0}):Play()
+	task.wait(0.2)
+	Main:TweenSize(
+		UDim2.fromScale(0.35, 0.5),
+		Enum.EasingDirection.Out,
+		Enum.EasingStyle.Quad,
+		0.3,
+		true
+	)
+	task.wait(0.3)
+	Logo:TweenSizeAndPosition(
+		UDim2.fromScale(0.175, 0.175),
+		UDim2.fromScale(0.085, 0.085),
+		Enum.EasingDirection.Out,
+		Enum.EasingStyle.Quad,
+		0.3,
+		true
+	)
+	for _, obj in pairs(Main:GetChildren()) do
+		if obj:IsA("GuiObject") and obj ~= Intro then
+			obj.Visible = true
+		end
+	end
+	local mainPos = Main.AbsolutePosition
+	local mainSize = Main.AbsoluteSize
+	WhitelistButton.Position = UDim2.new(0, mainPos.X + mainSize.X + 10, 0, mainPos.Y)
+	WhitelistButton.Visible = true
+	task.wait(0.3)
+	TweenService:Create(Intro, TweenInfo.new(0.3), {BackgroundTransparency = 1}):Play()
+	task.wait(0.3)
+	Logo.Active = false
+end)
+
+local function updateWhitelistButtonPosition()
+	if WhitelistButton.Visible then
+		local mainPos = Main.AbsolutePosition
+		local mainSize = Main.AbsoluteSize
+		WhitelistButton.Position = UDim2.new(0, mainPos.X + mainSize.X + 10, 0, mainPos.Y)
+	end
+end
+
+WhitelistButton.MouseButton1Click:Connect(function()
+	if WhitelistFrame.Visible then
+		WhitelistFrame.Visible = false
+		WhitelistButton.Text = "Whitelist ▼"
+	else
+		WhitelistFrame.Visible = true
+		WhitelistButton.Text = "Whitelist ▲"
+		refreshWhitelistPlayers()
+	end
+end)
+
+function refreshWhitelistPlayers()
+	for _, child in ipairs(WhitelistFrame:GetChildren()) do
+		if child:IsA("TextButton") then
+			child:Destroy()
+		end
+	end
+	local players = PlayersService:GetPlayers()
+	local itemHeight = 25
+	local count = 0
+	for _, plr in ipairs(players) do
+		if plr ~= LocalPlayer then
+			count = count + 1
+			local playerButton = Instance.new("TextButton")
+			playerButton.Name = plr.Name .. "_Whitelist"
+			playerButton.Size = UDim2.new(1, -10, 0, itemHeight)
+			playerButton.Position = UDim2.new(0, 5, 0, 0)
+			playerButton.BorderSizePixel = 0
+			playerButton.Text = plr.Name
+			playerButton.Font = Enum.Font.TitilliumWeb
+			playerButton.TextScaled = true
+			playerButton.TextSize = 12
+			playerButton.Parent = WhitelistFrame
+			playerButton.ZIndex = 1002
+			local isWhitelisted = is_whitelisted(plr.UserId)
+			if isWhitelisted then
+				playerButton.BackgroundColor3 = Color3.fromRGB(0, 150, 0)
+				playerButton.TextColor3 = Color3.fromRGB(255, 255, 255)
+			else
+				playerButton.BackgroundColor3 = Color3.fromRGB(90, 90, 90)
+				playerButton.TextColor3 = Color3.fromRGB(255, 255, 255)
+			end
+			playerButton.MouseButton1Click:Connect(function()
+				if is_whitelisted(plr.UserId) then
+					remove_from_whitelist(plr.UserId)
+					playerButton.BackgroundColor3 = Color3.fromRGB(90, 90, 90)
+					if enable_hitbox_global then
+						modify_player_hitbox(plr, false, enable_no_collision)
+					end
+				else
+					add_to_whitelist(plr.UserId)
+					playerButton.BackgroundColor3 = Color3.fromRGB(0, 150, 0)
+					if enable_hitbox_global then
+						restore_original_part_properties(plr)
+					end
+				end
+			end)
+		end
+	end
+	local totalHeight = count * (itemHeight + WhitelistUIListLayout.Padding.Offset)
+	WhitelistFrame.CanvasSize = UDim2.new(0, 0, 0, math.max(totalHeight, 200))
+end
+
+local element_height = 25
+local elements = 0
+
+local function addSpace(parent)
+	local space = tab:Clone()
+	space.Parent = parent
+	space.LayoutOrder = elements
+	space.Visible = true
+	elements += 1
+end
+
+local function addToggle(name, funct, enabled, ...)
+	local newTog = Toggle:Clone()
+	local args = {...}
+	newTog.MouseButton1Click:Connect(function()
+		enabled = not enabled
+		newTog:WaitForChild("Enabled"):WaitForChild("Check").Visible = enabled
+		funct(enabled, unpack(args))
+	end)
+	newTog:WaitForChild("Enabled"):WaitForChild("Check").Visible = enabled
+	newTog:WaitForChild("Name").Text = name
+	newTog.Size = UDim2.new(0.95, 0, 0, element_height)
+	newTog.Name = name
+	newTog.Parent = Menu
+	newTog.LayoutOrder = elements
+	newTog.Visible = true
+	elements += 1
+	addSpace(Menu)
+	return newTog
+end
+
+local function addButton(name, funct, ...)
+	local newBut = Button:Clone()
+	local args = {...}
+	newBut.MouseButton1Click:Connect(function() funct(unpack(args)) end)
+	newBut:WaitForChild("Name").Text = name
+	newBut.Size = UDim2.new(0.95, 0, 0, element_height)
+	newBut.Name = name
+	newBut.Parent = Menu
+	newBut.LayoutOrder = elements
+	newBut.Visible = true
+	elements += 1
+	addSpace(Menu)
+	return newBut
+end
+
+local function addComboBox(text, options, funct, ...)
+	local newCombo = ComboBox:Clone()
+	local enabled = false
+	local elems = {}
+	local args = {...}
+	local function setBoxState()
+		newCombo:WaitForChild("Img").Rotation = enabled and 0 or 180
+		for _, elem in ipairs(elems) do elem.Visible = enabled end
+	end
+	newCombo.MouseButton1Click:Connect(function()
+		enabled = not enabled
+		setBoxState()
+	end)
+	newCombo:WaitForChild("Name").Text = text .. ": " .. (#options > 0 and options[1] or "")
+	newCombo.Size = UDim2.new(0.95, 0, 0, element_height)
+	newCombo.Name = #options > 0 and options[1] or ""
+	newCombo.Parent = Menu
+	newCombo.LayoutOrder = elements
+	newCombo.Visible = true
+	elements += 1
+	addSpace(Menu)
+	for _, optName in ipairs(options) do
+		local newElem = ComboElem:Clone()
+		table.insert(elems, newElem)
+		newElem.MouseButton1Click:Connect(function()
+			newCombo:WaitForChild("Name").Text = text .. ": " .. optName
+			enabled = false
+			setBoxState()
+			funct(optName, unpack(args))
+		end)
+		newElem:WaitForChild("Name").Text = optName
+		newElem.Size = UDim2.new(0.95, 0, 0, element_height)
+		newElem.Name = optName
+		newElem.Parent = Menu
+		newElem.LayoutOrder = elements
+		newElem.Visible = false
+		elements += 1
+		addSpace(Menu)
+	end
+	return newCombo
+end
+
+local function addSlider(name, min, max, default, funct, ...)
+	local newSlider = Slider:Clone()
+	local args = {...}
+	local value = default
+	local dragging = false
+	local sliderBar = newSlider:WaitForChild("SliderBar")
+	local sliderBtn = sliderBar:WaitForChild("SliderButton")
+	local range = math.max(max - min, 1)
+	local function updateSlider(input)
+		local pos = math.clamp((input.Position.X - sliderBar.AbsolutePosition.X) / sliderBar.AbsoluteSize.X, 0, 1)
+		value = math.floor(min + range * pos)
+		sliderBtn.Position = UDim2.new(pos, 0, 0.5, 0)
+		newSlider:WaitForChild("SliderName").Text = name .. ": " .. value
+		funct(value, unpack(args))
+	end
+	sliderBtn.InputBegan:Connect(function(input)
+		if input.UserInputType == Enum.UserInputType.MouseButton1 or input.UserInputType == Enum.UserInputType.Touch then
+			dragging = true
+		end
+	end)
+	UserInputService.InputChanged:Connect(function(input)
+		if dragging and (input.UserInputType == Enum.UserInputType.MouseMovement or input.UserInputType == Enum.UserInputType.Touch) then
+			updateSlider(input)
+		end
+	end)
+	UserInputService.InputEnded:Connect(function(input)
+		if input.UserInputType == Enum.UserInputType.MouseButton1 or input.UserInputType == Enum.UserInputType.Touch then
+			dragging = false
+		end
+	end)
+	newSlider:WaitForChild("SliderName").Text = name .. ": " .. default
+	newSlider.Size = UDim2.new(0.95, 0, 0, element_height)
+	newSlider.Name = name
+	newSlider.Parent = Menu
+	newSlider.LayoutOrder = elements
+	newSlider.Visible = true
+	elements += 1
+	addSpace(Menu)
+	local initialPos = (default - min) / range
+	sliderBtn.Position = UDim2.new(initialPos, 0, 0.5, 0)
+	return newSlider
+end
+
+local ESP_PRESET_COLORS = {
+	Color3.fromRGB(255, 0, 0),
+	Color3.fromRGB(255, 128, 0),
+	Color3.fromRGB(255, 255, 0),
+	Color3.fromRGB(0, 255, 0),
+	Color3.fromRGB(0, 255, 255),
+	Color3.fromRGB(0, 128, 255),
+	Color3.fromRGB(128, 0, 255),
+	Color3.fromRGB(255, 0, 255),
+	Color3.fromRGB(255, 255, 255),
+	Color3.fromRGB(180, 180, 180),
+	Color3.fromRGB(80, 80, 80),
+	Color3.fromRGB(0, 0, 0),
+	Color3.fromRGB(255, 105, 180),
+	Color3.fromRGB(139, 69, 19),
+	Color3.fromRGB(0, 128, 0),
+	Color3.fromRGB(255, 215, 0),
+}
+
+local active_color_palette = nil
+local active_palette_anchor = nil
+local active_color_block = nil
+
+local function isMouseOverGui(guiObject)
+	if not guiObject or not guiObject.Parent then return false end
+	local mousePos = UserInputService:GetMouseLocation()
+	local inset = GuiService:GetGuiInset()
+	local adjustedY = mousePos.Y - inset.Y
+	local pos = guiObject.AbsolutePosition
+	local size = guiObject.AbsoluteSize
+	return mousePos.X >= pos.X and mousePos.X <= pos.X + size.X
+		and adjustedY >= pos.Y and adjustedY <= pos.Y + size.Y
+end
+
+local function close_color_palette()
+	if active_color_palette then
+		active_color_palette:Destroy()
+		active_color_palette = nil
+	end
+	active_palette_anchor = nil
+	if active_color_block then
+		active_color_block.Size = UDim2.new(1, 0, 0, 34)
+		active_color_block = nil
+	end
+end
+
+local function open_color_palette(anchorButton, colorBlock, currentColor, onPick)
+	if active_color_palette and active_palette_anchor == anchorButton then
+		close_color_palette()
+		return
+	end
+	close_color_palette()
+	local columns = 4
+	local rows = math.ceil(#ESP_PRESET_COLORS / columns)
+	local paletteWidth = columns * 24 + (columns + 1) * 4
+	local paletteHeight = rows * 24 + (rows + 1) * 4 + 22
+	local palette = Instance.new("Frame")
+	palette.Name = "ColorPalette"
+	palette.BackgroundColor3 = Color3.fromRGB(45, 45, 45)
+	palette.BorderSizePixel = 0
+	palette.ZIndex = 50
+	palette.Size = UDim2.new(0, paletteWidth, 0, paletteHeight)
+	palette.Position = UDim2.new(0, anchorButton.Position.X.Offset, 0, 34)
+	palette.Parent = colorBlock
+	local paletteCorner = Instance.new("UICorner")
+	paletteCorner.CornerRadius = UDim.new(0.08, 0)
+	paletteCorner.Parent = palette
+	local closeBtn = Instance.new("TextButton")
+	closeBtn.Name = "ClosePalette"
+	closeBtn.BackgroundColor3 = Color3.fromRGB(90, 90, 90)
+	closeBtn.BorderSizePixel = 0
+	closeBtn.Font = Enum.Font.TitilliumWeb
+	closeBtn.Text = "X"
+	closeBtn.TextColor3 = Color3.fromRGB(255, 255, 255)
+	closeBtn.TextScaled = true
+	closeBtn.Size = UDim2.new(0, 20, 0, 20)
+	closeBtn.Position = UDim2.new(1, -22, 0, 2)
+	closeBtn.ZIndex = 51
+	closeBtn.Parent = palette
+	local closeBtnCorner = Instance.new("UICorner")
+	closeBtnCorner.CornerRadius = UDim.new(0.2, 0)
+	closeBtnCorner.Parent = closeBtn
+	closeBtn.MouseButton1Click:Connect(close_color_palette)
+	local gridHolder = Instance.new("Frame")
+	gridHolder.Name = "GridHolder"
+	gridHolder.BackgroundTransparency = 1
+	gridHolder.Size = UDim2.new(1, -4, 1, -24)
+	gridHolder.Position = UDim2.new(0, 2, 0, 22)
+	gridHolder.ZIndex = 51
+	gridHolder.Parent = palette
+	local paletteLayout = Instance.new("UIGridLayout")
+	paletteLayout.CellPadding = UDim2.new(0, 4, 0, 4)
+	paletteLayout.CellSize = UDim2.new(0, 24, 0, 24)
+	paletteLayout.FillDirectionMaxCells = 4
+	paletteLayout.Parent = gridHolder
+	for _, presetColor in ipairs(ESP_PRESET_COLORS) do
+		local colorButton = Instance.new("TextButton")
+		colorButton.BackgroundColor3 = presetColor
+		colorButton.BorderSizePixel = 0
+		colorButton.Text = ""
+		colorButton.ZIndex = 52
+		colorButton.Parent = gridHolder
+		local colorCorner = Instance.new("UICorner")
+		colorCorner.CornerRadius = UDim.new(0.15, 0)
+		colorCorner.Parent = colorButton
+		colorButton.MouseButton1Click:Connect(function()
+			onPick(presetColor)
+			close_color_palette()
+		end)
+	end
+	active_color_block = colorBlock
+	colorBlock.Size = UDim2.new(1, 0, 0, 34 + paletteHeight + 4)
+	active_color_palette = palette
+	active_palette_anchor = anchorButton
+end
+
+UserInputService.InputEnded:Connect(function(input)
+	if input.UserInputType ~= Enum.UserInputType.MouseButton1 then return end
+	if not active_color_palette then return end
+	task.defer(function()
+		if not active_color_palette then return end
+		if isMouseOverGui(active_color_palette) then return end
+		if isMouseOverGui(active_palette_anchor) then return end
+		close_color_palette()
+	end)
+end)
+
+local function addWallColorToggle(name, enabledDefault, color1Default, color2Default, onToggleChange, onColor1Change, onColor2Change)
+	local toggleEnabled = enabledDefault
+	local color1 = color1Default
+	local color2 = color2Default
+	local newTog = Toggle:Clone()
+	newTog.MouseButton1Click:Connect(function()
+		toggleEnabled = not toggleEnabled
+		newTog:WaitForChild("Enabled"):WaitForChild("Check").Visible = toggleEnabled
+		onToggleChange(toggleEnabled)
+	end)
+	newTog:WaitForChild("Enabled"):WaitForChild("Check").Visible = toggleEnabled
+	newTog:WaitForChild("Name").Text = name
+	newTog.Size = UDim2.new(0.95, 0, 0, element_height)
+	newTog.Name = name
+	newTog.Parent = Menu
+	newTog.LayoutOrder = elements
+	newTog.Visible = true
+	elements += 1
+	local colorBlock = Instance.new("Frame")
+	colorBlock.Name = name .. "_ColorBlock"
+	colorBlock.BackgroundTransparency = 1
+	colorBlock.Size = UDim2.new(0.95, 0, 0, 34)
+	colorBlock.Parent = Menu
+	colorBlock.LayoutOrder = elements
+	colorBlock.Visible = true
+	colorBlock.ZIndex = 13
+	elements += 1
+	local colorRow = Instance.new("Frame")
+	colorRow.Name = name .. "_ColorRow"
+	colorRow.BackgroundTransparency = 1
+	colorRow.Size = UDim2.new(1, 0, 0, 34)
+	colorRow.Position = UDim2.new(0, 0, 0, 0)
+	colorRow.ZIndex = 13
+	colorRow.Parent = colorBlock
+	local swatch1 = Instance.new("TextButton")
+	swatch1.Name = "Color1"
+	swatch1.BackgroundColor3 = color1
+	swatch1.BorderSizePixel = 0
+	swatch1.Position = UDim2.new(0.05, 0, 0.5, -14)
+	swatch1.Size = UDim2.new(0, 28, 0, 28)
+	swatch1.Text = ""
+	swatch1.ZIndex = 13
+	swatch1.Parent = colorRow
+	local swatch1Corner = Instance.new("UICorner")
+	swatch1Corner.CornerRadius = UDim.new(0.2, 0)
+	swatch1Corner.Parent = swatch1
+	local swatch2 = Instance.new("TextButton")
+	swatch2.Name = "Color2"
+	swatch2.BackgroundColor3 = color2
+	swatch2.BorderSizePixel = 0
+	swatch2.Position = UDim2.new(0.05, 36, 0.5, -14)
+	swatch2.Size = UDim2.new(0, 28, 0, 28)
+	swatch2.Text = ""
+	swatch2.ZIndex = 13
+	swatch2.Parent = colorRow
+	local swatch2Corner = Instance.new("UICorner")
+	swatch2Corner.CornerRadius = UDim.new(0.2, 0)
+	swatch2Corner.Parent = swatch2
+	swatch1.MouseButton1Click:Connect(function()
+		open_color_palette(swatch1, colorBlock, color1, function(pickedColor)
+			color1 = pickedColor
+			swatch1.BackgroundColor3 = pickedColor
+			onColor1Change(pickedColor)
+		end)
+	end)
+	swatch2.MouseButton1Click:Connect(function()
+		open_color_palette(swatch2, colorBlock, color2, function(pickedColor)
+			color2 = pickedColor
+			swatch2.BackgroundColor3 = pickedColor
+			onColor2Change(pickedColor)
+		end)
+	end)
+	addSpace(Menu)
+	return newTog, colorBlock
+end
+
+local hitbox_original_properties = {}
+local hitbox_size = 3
+local hitbox_transparency = 0.6
+local hitbox_team_check_mode = "Everyone"
+local hitbox_target_parts = {"UpperTorso", "Head", "HumanoidRootPart"}
+local enable_hitbox_global = false
+local enable_no_collision = true
+local hitbox_search_range = 10000
+
+local esp_enabled = false
+local esp_team_check = false
+local esp_boxes = true
+local esp_names = true
+local esp_distance = false
+local esp_health = true
+local esp_tracers = false
+local esp_font_size = 5
+local esp_box_color = Color3.fromRGB(255, 0, 0)
+local esp_text_color = Color3.fromRGB(255, 255, 255)
+local esp_wall_color_enabled = persisted_settings.esp_wall_color_enabled
+local esp_wall_color_1 = tableToColor(persisted_settings.esp_wall_color_1, Color3.fromRGB(255, 128, 0))
+local esp_wall_color_2 = tableToColor(persisted_settings.esp_wall_color_2, Color3.fromRGB(0, 255, 0))
+
+local function persist_wall_color_settings()
+	persisted_settings.esp_wall_color_enabled = esp_wall_color_enabled
+	persisted_settings.esp_wall_color_1 = colorToTable(esp_wall_color_1)
+	persisted_settings.esp_wall_color_2 = colorToTable(esp_wall_color_2)
+	save_settings(persisted_settings)
+end
+local esp_min_font_size = 1
+local esp_max_font_size = 20
+
+local esp_objects = {}
+local player_char_connections = {}
+local cached_players = PlayersService:GetPlayers()
+
+local function getDistanceScaledFontSize(baseSize, distance)
+	local scaleFactor = math.clamp(1000 / distance, 0.4, 1.8)
+	local finalSize = math.floor(baseSize * scaleFactor)
+	return math.clamp(finalSize, esp_min_font_size, esp_max_font_size)
+end
+
+local function save_original_part_properties(player, part)
+	if not hitbox_original_properties[player] then
+		hitbox_original_properties[player] = {}
+	end
+	if not hitbox_original_properties[player][part.Name] then
+		hitbox_original_properties[player][part.Name] = {
+			CanCollide = part.CanCollide,
+			Transparency = part.Transparency,
+			Size = part.Size,
+		}
+	end
+end
+
+local function restore_character_parts(player, character)
+	if not hitbox_original_properties[player] or not character then return end
+	for part_name, original_properties in pairs(hitbox_original_properties[player]) do
+		local part = character:FindFirstChild(part_name)
+		if part and part:IsA("BasePart") then
+			part.CanCollide = original_properties.CanCollide
+			part.Transparency = original_properties.Transparency
+			part.Size = original_properties.Size
+		end
+	end
+end
+
+local function restore_original_part_properties(player)
+	if hitbox_original_properties[player] then
+		local character = player.Character
+		if character then
+			restore_character_parts(player, character)
+		end
+	end
+end
+
+local function isWithinRange(pos1, pos2, range)
+	local dx = pos1.X - pos2.X
+	local dy = pos1.Y - pos2.Y
+	local dz = pos1.Z - pos2.Z
+	return (dx*dx + dy*dy + dz*dz) <= (range*range)
+end
+
+local function modify_player_hitbox(player, enable_hitbox, no_collision)
+	for _, part_name in ipairs(hitbox_target_parts) do
+		local part = player.Character and player.Character:FindFirstChild(part_name)
+		if part and part:IsA("BasePart") then
+			if enable_hitbox then
+				save_original_part_properties(player, part)
+				part.CanCollide = not no_collision
+				part.Transparency = math.clamp(hitbox_transparency, 0, 1)
+				part.Size = Vector3.new(hitbox_size, hitbox_size, hitbox_size)
+			else
+				restore_original_part_properties(player)
+			end
+		end
+	end
+end
+
+local function is_target_player_hitbox(target_player)
+	if is_whitelisted(target_player.UserId) then
+		return false
+	end
+	if hitbox_team_check_mode == "FFA" or hitbox_team_check_mode == "Everyone" then
+		return true
+	end
+	if hitbox_team_check_mode == "Team-Based" then
+		return target_player.Team ~= LocalPlayer.Team
+	end
+	return target_player.Team ~= LocalPlayer.Team
+end
+
+local function update_all_player_hitboxes(enable_hitbox, no_collision)
+	local localChar = LocalPlayer.Character
+	local localHRP = localChar and localChar:FindFirstChild("HumanoidRootPart")
+	local localPos = localHRP and localHRP.Position
+	for _, player in ipairs(cached_players) do
+		if player ~= LocalPlayer then
+			local character = player.Character
+			local targetHRP = character and character:FindFirstChild("HumanoidRootPart")
+			if targetHRP then
+				local inRange = not localPos or isWithinRange(localPos, targetHRP.Position, hitbox_search_range)
+				if enable_hitbox and is_target_player_hitbox(player) and inRange then
+					modify_player_hitbox(player, true, no_collision)
+				else
+					modify_player_hitbox(player, false, no_collision)
+				end
+			end
+		end
+	end
+end
+
+local function cleanup_removed_players_data()
+	for player, _ in pairs(hitbox_original_properties) do
+		if not player.Parent then
+			hitbox_original_properties[player] = nil
+		end
+	end
+end
+
+local function setup_player_character_handlers(player)
+	if player == LocalPlayer then return end
+	if player_char_connections[player] then
+		for _, conn in ipairs(player_char_connections[player]) do
+			conn:Disconnect()
+		end
+	end
+	player_char_connections[player] = {}
+	local function on_character(character)
+		local removingConn = character.AncestryChanged:Connect(function(_, parent)
+			if parent == nil then
+				restore_character_parts(player, character)
+				hitbox_original_properties[player] = {}
+			end
+		end)
+		table.insert(player_char_connections[player], removingConn)
+		local humanoid = character:FindFirstChildOfClass("Humanoid")
+		if humanoid then
+			local diedConn = humanoid.Died:Connect(function()
+				restore_character_parts(player, character)
+			end)
+			table.insert(player_char_connections[player], diedConn)
+		end
+		task.wait(0.1)
+		if enable_hitbox_global and is_target_player_hitbox(player) then
+			modify_player_hitbox(player, true, enable_no_collision)
+		end
+	end
+	if player.Character then
+		task.spawn(on_character, player.Character)
+	end
+	table.insert(player_char_connections[player], player.CharacterAdded:Connect(on_character))
+end
+
+local function create_esp_object(player)
+	if esp_objects[player] then return end
+	local objects = {
+		BoxTop = Drawing.new("Line"),
+		BoxBottom = Drawing.new("Line"),
+		BoxLeft = Drawing.new("Line"),
+		BoxRight = Drawing.new("Line"),
+		Name = Drawing.new("Text"),
+		Distance = Drawing.new("Text"),
+		Health = Drawing.new("Text"),
+		Tracer = Drawing.new("Line")
+	}
+	objects.BoxTop.Visible = false
+	objects.BoxTop.Color = esp_box_color
+	objects.BoxTop.Thickness = 1
+	objects.BoxBottom.Visible = false
+	objects.BoxBottom.Color = esp_box_color
+	objects.BoxBottom.Thickness = 1
+	objects.BoxLeft.Visible = false
+	objects.BoxLeft.Color = esp_box_color
+	objects.BoxLeft.Thickness = 1
+	objects.BoxRight.Visible = false
+	objects.BoxRight.Color = esp_box_color
+	objects.BoxRight.Thickness = 1
+	objects.Name.Visible = false
+	objects.Name.Color = esp_text_color
+	objects.Name.Center = true
+	objects.Name.Outline = true
+	objects.Name.Size = 7
+	objects.Distance.Visible = false
+	objects.Distance.Color = esp_text_color
+	objects.Distance.Center = true
+	objects.Distance.Outline = true
+	objects.Distance.Size = 7
+	objects.Health.Visible = false
+	objects.Health.Color = esp_text_color
+	objects.Health.Center = true
+	objects.Health.Outline = true
+	objects.Health.Size = 7
+	objects.Tracer.Visible = false
+	objects.Tracer.Color = esp_box_color
+	objects.Tracer.Thickness = 1
+	esp_objects[player] = objects
+end
+
+local function remove_esp_object(player)
+	if esp_objects[player] then
+		for _, obj in pairs(esp_objects[player]) do
+			obj:Remove()
+		end
+		esp_objects[player] = nil
+	end
+end
+
+local function is_target_behind_wall(character, targetPart)
+	if not character or not targetPart then
+		return false
+	end
+	local origin = Camera.CFrame.Position
+	local targetPos = targetPart.Position
+	local direction = targetPos - origin
+	local distance = direction.Magnitude
+	if distance < 0.1 then
+		return false
+	end
+	local rayParams = RaycastParams.new()
+	rayParams.FilterType = Enum.RaycastFilterType.Exclude
+	local filterList = {}
+	if LocalPlayer.Character then
+		table.insert(filterList, LocalPlayer.Character)
+	end
+	rayParams.FilterDescendantsInstances = filterList
+	local result = Workspace:Raycast(origin, direction.Unit * distance, rayParams)
+	if not result then
+		return false
+	end
+	local hit = result.Instance
+	if hit:IsDescendantOf(character) then
+		return false
+	end
+	local hitModel = hit:FindFirstAncestorOfClass("Model")
+	if hitModel == character then
+		return false
+	end
+	return true
+end
+
+local function update_esp()
+	for player, objects in pairs(esp_objects) do
+		local character = player.Parent and player.Character
+		local hrp = character and character:FindFirstChild("HumanoidRootPart")
+		local head = character and character:FindFirstChild("Head")
+		if not hrp or not head then
+			for _, obj in pairs(objects) do obj.Visible = false end
+			continue
+		end
+		if player == LocalPlayer then
+			for _, obj in pairs(objects) do obj.Visible = false end
+			continue
+		end
+		if esp_team_check and player.Team == LocalPlayer.Team then
+			for _, obj in pairs(objects) do obj.Visible = false end
+			continue
+		end
+		local humanoid = character:FindFirstChildOfClass("Humanoid")
+		local pos, onScreen = Camera:WorldToViewportPoint(hrp.Position)
+		local headPos = Camera:WorldToViewportPoint(head.Position + Vector3.new(0, 0.5, 0))
+		local legPos = Camera:WorldToViewportPoint(hrp.Position - Vector3.new(0, 3, 0))
+		if onScreen and esp_enabled then
+			local distance = (hrp.Position - Camera.CFrame.Position).Magnitude
+			local dynamicFontSize = getDistanceScaledFontSize(esp_font_size, distance)
+			local boxHeight = math.abs(headPos.Y - legPos.Y)
+			if boxHeight < 2 then
+				for _, obj in pairs(objects) do obj.Visible = false end
+				continue
+			end
+			local boxWidth = math.max(boxHeight * 0.35, 2)
+			local topLeft = Vector2.new(pos.X - boxWidth / 2, math.min(headPos.Y, legPos.Y))
+			local topRight = Vector2.new(pos.X + boxWidth /  2, math.min(headPos.Y, legPos.Y))
+			local bottomLeft = Vector2.new(pos.X - boxWidth / 2, math.max(headPos.Y, legPos.Y))
+			local bottomRight = Vector2.new(pos.X + boxWidth / 2, math.max(headPos.Y, legPos.Y))
+			local drawColor = esp_box_color
+			if esp_wall_color_enabled then
+				drawColor = is_target_behind_wall(character, hrp) and esp_wall_color_1 or esp_wall_color_2
+			end
+			objects.BoxTop.Color = drawColor
+			objects.BoxBottom.Color = drawColor
+			objects.BoxLeft.Color = drawColor
+			objects.BoxRight.Color = drawColor
+			objects.Tracer.Color = drawColor
+			if esp_boxes then
+				objects.BoxTop.From = topLeft
+				objects.BoxTop.To = topRight
+				objects.BoxTop.Visible = true
+				objects.BoxBottom.From = bottomLeft
+				objects.BoxBottom.To = bottomRight
+				objects.BoxBottom.Visible = true
+				objects.BoxLeft.From = topLeft
+				objects.BoxLeft.To = bottomLeft
+				objects.BoxLeft.Visible = true
+				objects.BoxRight.From = topRight
+				objects.BoxRight.To = bottomRight
+				objects.BoxRight.Visible = true
+			else
+				objects.BoxTop.Visible = false
+				objects.BoxBottom.Visible = false
+				objects.BoxLeft.Visible = false
+				objects.BoxRight.Visible = false
+			end
+			local currentY = topLeft.Y - 4
+			if esp_names then
+				objects.Name.Size = dynamicFontSize
+				objects.Name.Text = player.Name
+				objects.Name.Position = Vector2.new(pos.X, currentY - 8)
+				objects.Name.Visible = true
+				currentY = currentY - 10
+			else
+				objects.Name.Visible = false
+			end
+			if esp_health and humanoid then
+				objects.Health.Size = dynamicFontSize
+				objects.Health.Text = math.floor(humanoid.Health) .. "/" .. math.floor(humanoid.MaxHealth)
+				objects.Health.Position = Vector2.new(pos.X, bottomLeft.Y + 4)
+				objects.Health.Visible = true
+			else
+				objects.Health.Visible = false
+			end
+			if esp_distance then
+				objects.Distance.Size = dynamicFontSize
+				objects.Distance.Text = "[" .. math.floor(distance) .. "m]"
+				objects.Distance.Position = Vector2.new(pos.X, bottomLeft.Y + (esp_health and 12 or 4))
+				objects.Distance.Visible = true
+			else
+				objects.Distance.Visible = false
+			end
+			if esp_tracers then
+				objects.Tracer.From = Vector2.new(Camera.ViewportSize.X / 2, Camera.ViewportSize.Y)
+				objects.Tracer.To = Vector2.new(pos.X, pos.Y)
+				objects.Tracer.Visible = true
+			else
+				objects.Tracer.Visible = false
+			end
+		else
+			for _, obj in pairs(objects) do obj.Visible = false end
+		end
+	end
+end
+
+local fly_enabled = false
+local fly_speed = 50
+local fly_connection = nil
+local fly_body_gyro = nil
+local fly_body_velocity = nil
+
+local function start_fly()
+	if not LocalPlayer.Character or not LocalPlayer.Character:FindFirstChild("HumanoidRootPart") then return end
+	local hrp = LocalPlayer.Character.HumanoidRootPart
+	fly_body_gyro = Instance.new("BodyGyro")
+	fly_body_gyro.P = 9e4
+	fly_body_gyro.MaxTorque = Vector3.new(9e9, 9e9, 9e9)
+	fly_body_gyro.CFrame = hrp.CFrame
+	fly_body_gyro.Parent = hrp
+	fly_body_velocity = Instance.new("BodyVelocity")
+	fly_body_velocity.Velocity = Vector3.zero
+	fly_body_velocity.MaxForce = Vector3.new(9e9, 9e9, 9e9)
+	fly_body_velocity.Parent = hrp
+	fly_connection = RunService.RenderStepped:Connect(function()
+		if not fly_enabled then return end
+		local character = LocalPlayer.Character
+		local current_hrp = character and character:FindFirstChild("HumanoidRootPart")
+		if not current_hrp then return end
+		local cameraCF = Camera.CFrame
+		local moveDirection = Vector3.zero
+		if UserInputService:IsKeyDown(Enum.KeyCode.W) then
+			moveDirection = moveDirection + cameraCF.LookVector
+		end
+		if UserInputService:IsKeyDown(Enum.KeyCode.S) then
+			moveDirection = moveDirection - cameraCF.LookVector
+		end
+		if UserInputService:IsKeyDown(Enum.KeyCode.A) then
+			moveDirection = moveDirection - cameraCF.RightVector
+		end
+		if UserInputService:IsKeyDown(Enum.KeyCode.D) then
+			moveDirection = moveDirection + cameraCF.RightVector
+		end
+		if UserInputService:IsKeyDown(Enum.KeyCode.Space) then
+			moveDirection = moveDirection + Vector3.new(0, 1, 0)
+		end
+		if UserInputService:IsKeyDown(Enum.KeyCode.LeftShift) then
+			moveDirection = moveDirection - Vector3.new(0, 1, 0)
+		end
+		if moveDirection.Magnitude > 0 then
+			moveDirection = moveDirection.Unit * fly_speed
+		end
+		if fly_body_velocity and fly_body_velocity.Parent then
+			fly_body_velocity.Velocity = moveDirection
+		end
+		if fly_body_gyro and fly_body_gyro.Parent then
+			fly_body_gyro.CFrame = cameraCF
+		end
+	end)
+end
+
+local function stop_fly()
+	if fly_connection then
+		fly_connection:Disconnect()
+		fly_connection = nil
+	end
+	if fly_body_gyro then
+		fly_body_gyro:Destroy()
+		fly_body_gyro = nil
+	end
+	if fly_body_velocity then
+		fly_body_velocity:Destroy()
+		fly_body_velocity = nil
+	end
+end
+
+local speed_enabled = false
+local speed_value = 16
+local jump_enabled = false
+local jump_value = 50
+
+local function update_speed()
+	local character = LocalPlayer.Character
+	local humanoid = character and character:FindFirstChildOfClass("Humanoid")
+	if humanoid then
+		humanoid.WalkSpeed = speed_enabled and speed_value or 16
+	end
+end
+
+local function update_jump()
+	local character = LocalPlayer.Character
+	local humanoid = character and character:FindFirstChildOfClass("Humanoid")
+	if humanoid then
+		humanoid.JumpPower = jump_enabled and jump_value or 50
+	end
+end
+
+local noclip_enabled = false
+local noclip_connection = nil
+local noclip_original_states = {}
+local noclip_descendant_connection = nil
+
+local function record_character_collisions(character)
+	if not character then return end
+	for _, part in ipairs(character:GetDescendants()) do
+		if part:IsA("BasePart") and noclip_original_states[part] == nil then
+			noclip_original_states[part] = part.CanCollide
+		end
+	end
+end
+
+local function apply_noclip_to_character(character)
+	if not character then return end
+	for _, part in ipairs(character:GetDescendants()) do
+		if part:IsA("BasePart") then
+			if noclip_original_states[part] == nil then
+				noclip_original_states[part] = part.CanCollide
+			end
+			part.CanCollide = false
+		end
+	end
+end
+
+local function restore_noclip_states()
+	for part, original_state in pairs(noclip_original_states) do
+		if part and part.Parent then
+			part.CanCollide = original_state
+		end
+	end
+	noclip_original_states = {}
+end
+
+local function start_noclip()
+	local character = LocalPlayer.Character
+	if not character then return end
+	record_character_collisions(character)
+	apply_noclip_to_character(character)
+	noclip_connection = RunService.Stepped:Connect(function()
+		if not noclip_enabled then return end
+		local char = LocalPlayer.Character
+		if char then apply_noclip_to_character(char) end
+	end)
+	noclip_descendant_connection = character.DescendantAdded:Connect(function(descendant)
+		if not noclip_enabled then return end
+		if descendant:IsA("BasePart") then
+			if noclip_original_states[descendant] == nil then
+				noclip_original_states[descendant] = descendant.CanCollide
+			end
+			descendant.CanCollide = false
+		end
+	end)
+end
+
+local function stop_noclip()
+	if noclip_connection then
+		noclip_connection:Disconnect()
+		noclip_connection = nil
+	end
+	if noclip_descendant_connection then
+		noclip_descendant_connection:Disconnect()
+		noclip_descendant_connection = nil
+	end
+	restore_noclip_states()
+end
+
+local rapid_fire_enabled = false
+local rapid_fire_connection = nil
+local rapid_fire_speed = 10
+local rapid_fire_tool_only = true
+
+local function isHoldingTool()
+	local character = LocalPlayer.Character
+	if not character then return false end
+	for _, child in ipairs(character:GetChildren()) do
+		if child:IsA("Tool") then return true end
+	end
+	return false
+end
+
+local function start_rapid_fire()
+	rapid_fire_connection = RunService.Heartbeat:Connect(function()
+		if not rapid_fire_enabled then return end
+		if rapid_fire_tool_only and not isHoldingTool() then return end
+		if UserInputService:IsMouseButtonPressed(Enum.UserInputType.MouseButton1) then
+			mouse1press()
+			task.wait(0.1 / rapid_fire_speed)
+			mouse1release()
+		end
+	end)
+end
+
+local function stop_rapid_fire()
+	if rapid_fire_connection then
+		rapid_fire_connection:Disconnect()
+		rapid_fire_connection = nil
+	end
+end
+
+local full_bright_enabled = false
+local full_bright_value = 2
+local original_brightness = Lighting.Brightness
+local original_ambient = Lighting.Ambient
+
+local function update_full_bright()
+	if full_bright_enabled then
+		Lighting.Brightness = full_bright_value
+		Lighting.Ambient = Color3.fromRGB(255, 255, 255)
+		Lighting.GlobalShadows = false
+	else
+		Lighting.Brightness = original_brightness
+		Lighting.Ambient = original_ambient
+		Lighting.GlobalShadows = true
+	end
+end
+
+local auto_interact_enabled = false
+local instant_interact_enabled = true
+local interact_distance = 10
+local cached_prompts = {}
+local prompt_add_queue = {}
+local prompt_remove_queue = {}
+local original_hold_durations = {}
+
+Workspace.DescendantAdded:Connect(function(descendant)
+	if descendant:IsA("ProximityPrompt") then
+		table.insert(prompt_add_queue, descendant)
+	end
+end)
+
+Workspace.DescendantRemoving:Connect(function(descendant)
+	if descendant:IsA("ProximityPrompt") then
+		table.insert(prompt_remove_queue, descendant)
+	end
+end)
+
+local function process_prompt_queues()
+	for _, prompt in ipairs(prompt_add_queue) do
+		if prompt and prompt.Parent then
+			if original_hold_durations[prompt] == nil then
+				original_hold_durations[prompt] = prompt.HoldDuration
+			end
+			table.insert(cached_prompts, prompt)
+			if instant_interact_enabled then
+				prompt.HoldDuration = 0
+			end
+		end
+	end
+	prompt_add_queue = {}
+	for _, prompt in ipairs(prompt_remove_queue) do
+		for i, cached in ipairs(cached_prompts) do
+			if cached == prompt then
+				table.remove(cached_prompts, i)
+				break
+			end
+		end
+		original_hold_durations[prompt] = nil
+	end
+	prompt_remove_queue = {}
+end
+
+local lastAutoInteract = 0
+local AUTO_INTERACT_INTERVAL = 0.15
+
+local function updateAutoInteract()
+	if not auto_interact_enabled then return end
+	local now = tick()
+	if now - lastAutoInteract < AUTO_INTERACT_INTERVAL then return end
+	lastAutoInteract = now
+	local character = LocalPlayer.Character
+	local hrp = character and character:FindFirstChild("HumanoidRootPart")
+	if not hrp then return end
+	local localPos = hrp.Position
+	for _, obj in ipairs(cached_prompts) do
+		if obj and obj.Parent then
+			local parent = obj.Parent
+			if parent and parent:IsA("BasePart") then
+				local dist = (localPos - parent.Position).Magnitude
+				if dist <= interact_distance and dist <= obj.MaxActivationDistance then
+					if obj.Enabled then
+						fireproximityprompt(obj)
+					end
+				end
+			end
+		end
+	end
+end
+
+PlayersService.PlayerAdded:Connect(function(player)
+	table.insert(cached_players, player)
+	setup_player_character_handlers(player)
+	if esp_enabled and player ~= LocalPlayer then
+		create_esp_object(player)
+	end
+	if WhitelistFrame.Visible then
+		refreshWhitelistPlayers()
+	end
+end)
+
+PlayersService.PlayerRemoving:Connect(function(player)
+	for i, p in ipairs(cached_players) do
+		if p == player then
+			table.remove(cached_players, i)
+			break
+		end
+	end
+	if player_char_connections[player] then
+		for _, conn in ipairs(player_char_connections[player]) do
+			conn:Disconnect()
+		end
+		player_char_connections[player] = nil
+	end
+	remove_esp_object(player)
+	if player.Character then
+		restore_character_parts(player, player.Character)
+	end
+	hitbox_original_properties[player] = nil
+	if WhitelistFrame.Visible then
+		refreshWhitelistPlayers()
+	end
+end)
+
+for _, player in ipairs(cached_players) do
+	setup_player_character_handlers(player)
+end
+
+local lastCleanupTime = 0
+local CLEANUP_INTERVAL = 2
+
+RunService.Heartbeat:Connect(function()
+	if #prompt_add_queue > 0 or #prompt_remove_queue > 0 then
+		process_prompt_queues()
+	end
+	updateAutoInteract()
+	if enable_hitbox_global then
+		update_all_player_hitboxes(true, enable_no_collision)
+	end
+	local now = tick()
+	if now - lastCleanupTime >= CLEANUP_INTERVAL then
+		lastCleanupTime = now
+		cleanup_removed_players_data()
+	end
+end)
+
+local auto_click_key = "F"
+local auto_click_duration = 3
+local auto_click_speed = 50000
+local auto_click_running = false
+local auto_click_last_end = 0
+local AUTO_CLICK_COOLDOWN = 5
+local auto_click_cooldown_active = false
+
+LocalPlayer.CharacterAdded:Connect(function()
+	task.wait(0.5)
+	if noclip_enabled then
+		noclip_original_states = {}
+		start_noclip()
+	end
+	if speed_enabled then update_speed() end
+	if jump_enabled then update_jump() end
+	if fly_enabled then
+		task.wait(0.5)
+		start_fly()
+	end
+end)
+
+addSpace(Menu)
+addButton("=== HITBOX EXPANDER ===", function() end)
+
+addToggle("Enable Hitbox", function(state)
+	enable_hitbox_global = state
+	if not state then
+		update_all_player_hitboxes(false, enable_no_collision)
+		hitbox_original_properties = {}
+	end
+end, false)
+
+addToggle("No Collision (Hitbox)", function(state)
+	enable_no_collision = state
+end, true)
+
+addSlider("Hitbox Size", 1, 100, 3, function(value)
+	hitbox_size = value
+end)
+
+addSlider("Hitbox Transparency", 0, 10, 6, function(value)
+	hitbox_transparency = value / 10
+end)
+
+addSlider("Hitbox Range", 1, 10000, 10000, function(value)
+	hitbox_search_range = value
+end)
+
+addComboBox("Hitbox Team Check", {"FFA", "Team-Based", "Everyone"}, function(selection)
+	hitbox_team_check_mode = selection
+end)
+
+addSpace(Menu)
+addButton("=== ESP / WALLHACK ===", function() end)
+
+addToggle("Enable ESP", function(state)
+	esp_enabled = state
+	if state then
+		for _, player in ipairs(cached_players) do
+			if player ~= LocalPlayer then
+				create_esp_object(player)
+			end
+		end
+	else
+		for _, objects in pairs(esp_objects) do
+			for _, obj in pairs(objects) do obj.Visible = false end
+		end
+	end
+end, false)
+
+addSlider("ESP Font Size", 1, 10, 5, function(value)
+	esp_font_size = value
+end)
+
+addToggle("ESP Team Check", function(state)
+	esp_team_check = state
+end, false)
+
+addToggle("Show Boxes", function(state)
+	esp_boxes = state
+end, true)
+
+addToggle("Show Names", function(state)
+	esp_names = state
+end, true)
+
+addToggle("Show Distance", function(state)
+	esp_distance = state
+end, false)
+
+addToggle("Show Health", function(state)
+	esp_health = state
+end, true)
+
+addToggle("Show Tracers", function(state)
+	esp_tracers = state
+end, false)
+
+addWallColorToggle("Wall Color ESP", esp_wall_color_enabled, esp_wall_color_1, esp_wall_color_2,
+	function(state)
+		esp_wall_color_enabled = state
+		persist_wall_color_settings()
+	end,
+	function(color)
+		esp_wall_color_1 = color
+		persist_wall_color_settings()
+	end,
+	function(color)
+		esp_wall_color_2 = color
+		persist_wall_color_settings()
+	end
+)
+
+addSpace(Menu)
+addButton("=== MOVEMENT ===", function() end)
+
+addToggle("Fly", function(state)
+	fly_enabled = state
+	if state then start_fly() else stop_fly() end
+end, false)
+
+addSlider("Fly Speed", 0, 200, 50, function(value)
+	fly_speed = value
+end)
+
+addToggle("Speed Hack", function(state)
+	speed_enabled = state
+	update_speed()
+end, false)
+
+addSlider("Speed Value", 0, 200, 50, function(value)
+	speed_value = value
+	if speed_enabled then update_speed() end
+end)
+
+addToggle("Super Jump", function(state)
+	jump_enabled = state
+	update_jump()
+end, false)
+
+addSlider("Jump Power", 0, 200, 100, function(value)
+	jump_value = value
+	if jump_enabled then update_jump() end
+end)
+
+addToggle("Noclip", function(state)
+	noclip_enabled = state
+	if state then start_noclip() else stop_noclip() end
+end, false)
+
+addSpace(Menu)
+addButton("=== COMBAT ===", function() end)
+
+addToggle("Rapid Fire", function(state)
+	rapid_fire_enabled = state
+	if state then start_rapid_fire() else stop_rapid_fire() end
+end, false)
+
+addSlider("Rapid Fire Speed", 1, 100, 10, function(value)
+	rapid_fire_speed = value
+end)
+
+addToggle("Rapid Fire Tool Only", function(state)
+	rapid_fire_tool_only = state
+end, true)
+
+addSpace(Menu)
+addButton("=== VISUALS ===", function() end)
+
+addToggle("Full Bright", function(state)
+	full_bright_enabled = state
+	update_full_bright()
+end, false)
+
+addSlider("Full Bright Value", 0, 10, 2, function(value)
+	full_bright_value = value
+	if full_bright_enabled then update_full_bright() end
+end)
+
+addSpace(Menu)
+addButton("=== AUTO INTERACT ===", function() end)
+
+addToggle("Auto Interact", function(state)
+	auto_interact_enabled = state
+end, false)
+
+addToggle("Instant Interact", function(state)
+	instant_interact_enabled = state
+	for _, prompt in ipairs(cached_prompts) do
+		if prompt and prompt.Parent then
+			if state then
+				prompt.HoldDuration = 0
+			else
+				local orig = original_hold_durations[prompt]
+				if orig ~= nil then
+					prompt.HoldDuration = orig
+				end
+			end
+		end
+	end
+end, true)
+
+addSlider("Interact Distance", 1, 50, 10, function(value)
+	interact_distance = value
+end)
+
+addSpace(Menu)
+addButton("=== AUTO CLICK INTERACT ===", function() end)
+
+local clickBtn = Button:Clone()
+clickBtn:WaitForChild("Name").Text = "Auto Click: Ready (Tap)"
+clickBtn.Size = UDim2.new(0.95, 0, 0, element_height)
+clickBtn.Parent = Menu
+clickBtn.LayoutOrder = elements
+clickBtn.Visible = true
+elements += 1
+addSpace(Menu)
+
+local keyInput = Instance.new("TextBox")
+keyInput.Size = UDim2.new(0.95, 0, 0, 20)
+keyInput.BackgroundColor3 = Color3.fromRGB(55, 55, 55)
+keyInput.TextColor3 = Color3.fromRGB(255, 255, 255)
+keyInput.PlaceholderText = "Input Key (e.g. F)"
+keyInput.Text = "F"
+keyInput.Font = Enum.Font.TitilliumWeb
+keyInput.TextScaled = true
+keyInput.ClearTextOnFocus = false
+keyInput.Parent = Menu
+keyInput.LayoutOrder = elements
+elements += 1
+addSpace(Menu)
+
+function updateClickBtnState()
+	if auto_click_running then
+		clickBtn:WaitForChild("Name").Text = "Auto Click: RUNNING..."
+		return
+	end
+	local now = tick()
+	local elapsed = now - auto_click_last_end
+	if elapsed < AUTO_CLICK_COOLDOWN then
+		local remain = math.ceil(AUTO_CLICK_COOLDOWN - elapsed)
+		clickBtn:WaitForChild("Name").Text = "Cooldown: " .. remain .. "s"
+	else
+		clickBtn:WaitForChild("Name").Text = "Auto Click: Ready (Tap)"
+		auto_click_cooldown_active = false
+	end
+end
+
+clickBtn.MouseButton1Click:Connect(function()
+	if auto_click_running then return end
+	local now = tick()
+	if now - auto_click_last_end < AUTO_CLICK_COOLDOWN then return end
+	local key = keyInput.Text:upper()
+	if #key ~= 1 then
+		clickBtn:WaitForChild("Name").Text = "Invalid Key!"
+		task.delay(1, updateClickBtnState)
+		return
+	end
+	local keyCode = Enum.KeyCode[key]
+	if not keyCode then
+		clickBtn:WaitForChild("Name").Text = "Invalid Key!"
+		task.delay(1, updateClickBtnState)
+		return
+	end
+	auto_click_key = key
+	auto_click_running = true
+	updateClickBtnState()
+	task.spawn(function()
+		local vim = game:GetService("VirtualInputManager")
+		local startTime = tick()
+		local interval = 1 / math.max(1, auto_click_speed)
+		while tick() - startTime < auto_click_duration do
+			vim:SendKeyEvent(true, keyCode, false, game)
+			task.wait(interval / 2)
+			vim:SendKeyEvent(false, keyCode, false, game)
+			task.wait(interval)
+		end
+		auto_click_running = false
+		auto_click_last_end = tick()
+		auto_click_cooldown_active = true
+		updateClickBtnState()
+	end)
+end)
+
+addSlider("Click Duration (sec)", 0, 20000, 3, function(value)
+	auto_click_duration = value
+end)
+
+addSlider("Click Speed (per sec)", 5000, 50000, 50000, function(value)
+	auto_click_speed = value
+end)
+
+if instant_interact_enabled then
+	for _, obj in ipairs(Workspace:GetDescendants()) do
+		if obj:IsA("ProximityPrompt") then
+			original_hold_durations[obj] = obj.HoldDuration
+			table.insert(cached_prompts, obj)
+			obj.HoldDuration = 0
+		end
+	end
+end
+
+local function keepOnTop()
+	local parent = GUI_PARENT
+	if SPOC.Parent ~= parent then
+		SPOC.Parent = parent
+	end
+	SPOC.DisplayOrder = DISPLAY_ORDER
+	local currentParent = SPOC.Parent
+	if currentParent then
+		SPOC.Parent = nil
+		SPOC.Parent = currentParent
+	end
+end
+
+GuiService.MenuOpened:Connect(keepOnTop)
+
+RunService.RenderStepped:Connect(function()
+	if esp_enabled then
+		update_esp()
+	else
+		for _, objects in pairs(esp_objects) do
+			for _, obj in pairs(objects) do
+				obj.Visible = false
+			end
+		end
+	end
+	updateWhitelistButtonPosition()
+	if auto_click_cooldown_active and not auto_click_running then
+		updateClickBtnState()
+	end
+	if SPOC.DisplayOrder < DISPLAY_ORDER then
+		SPOC.DisplayOrder = DISPLAY_ORDER
+	end
+	if GuiService.MenuIsOpen then
+		keepOnTop()
+	end
+end)
+
+SPOC.Destroying:Connect(function()
+	persist_wall_color_settings()
+	_G.SPOC_EHB_ACTIVE[instanceToken] = nil
+end)
+
+Main:TweenPosition(
+	UDim2.fromScale(0.5, 0.5),
+	Enum.EasingDirection.Out,
+	Enum.EasingStyle.Back,
+	0.8,
+	true,
+	function()
+		task.wait(0.3)
+		Logo:TweenSizeAndPosition(
+			UDim2.fromScale(0.175, 0.175),
+			UDim2.fromScale(0.085, 0.085),
+			Enum.EasingDirection.Out,
+			Enum.EasingStyle.Quad,
+			0.6,
+			true,
+			function()
+				task.wait(0.2)
+				Title.Visible = true
+				Menu.Visible = true
+				Close.Visible = true
+				local mainPos = Main.AbsolutePosition
+				local mainSize = Main.AbsoluteSize
+				WhitelistButton.Position = UDim2.new(0, mainPos.X + mainSize.X + 10, 0, mainPos.Y)
+				WhitelistButton.Visible = true
+				TweenService:Create(Intro, TweenInfo.new(0.4), {BackgroundTransparency = 1}):Play()
+				Logo.Active = false
+			end
+		)
+	end
+)
+
