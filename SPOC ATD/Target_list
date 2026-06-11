@@ -19,7 +19,7 @@ return {
         [917112861] = {Delay = 0, JoinAlert = "Target spotted", KickReason = "Kicked", Confirm = false},
     },
     Warn = {
-        [335381574] = {Message = "Marked player"},
+        [7141243517] = {Message = "SPOC成员-PMC 加入了战斗"},
         [987654321] = {Message = "Suspicious activity detected"},
         [123456789] = {Message = "Under observation"},
         [555666777] = {Message = "Potential threat - monitor closely"},
