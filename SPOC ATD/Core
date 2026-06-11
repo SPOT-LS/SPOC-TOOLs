@@ -8,6 +8,7 @@ local StarterGui = game:GetService("StarterGui")
 if not LocalPlayer then return end
 
 local IsKicked = false
+local LeaveTrack = {}
 
 local function Notify(title, text, duration)
     pcall(function()
@@ -57,6 +58,23 @@ if Config.Warn and type(Config.Warn) == "table" then
         end
     end
 end
+
+local function RegisterLeaveTrack(player, leaveAlert, title)
+    if leaveAlert and leaveAlert ~= "" then
+        LeaveTrack[player.UserId] = {
+            Alert = leaveAlert,
+            Title = title or "Alert"
+        }
+    end
+end
+
+Players.PlayerRemoving:Connect(function(player)
+    local track = LeaveTrack[player.UserId]
+    if track then
+        LeaveTrack[player.UserId] = nil
+        Notify(track.Title, track.Alert, 10)
+    end
+end)
 
 local function CreateConfirmUI(player, kickReason, delay)
     local playerGui = LocalPlayer:WaitForChild("PlayerGui")
@@ -159,6 +177,7 @@ end
 local function ProcessPlayer(player)
     local kickData = KickMap[player.UserId]
     if kickData then
+        RegisterLeaveTrack(player, kickData.LeaveAlert, kickData.LeaveTitle or "Alert")
         if kickData.JoinAlert and kickData.JoinAlert ~= "" then
             Notify("Alert", kickData.JoinAlert, 10)
         end
@@ -179,6 +198,7 @@ local function ProcessPlayer(player)
 
     local warnData = WarnMap[player.UserId]
     if warnData then
+        RegisterLeaveTrack(player, warnData.LeaveAlert, warnData.LeaveTitle or "Warning")
         local text = player.Name
         if warnData.Message and warnData.Message ~= "" then
             text = text .. " | " .. warnData.Message
