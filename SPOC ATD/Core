@@ -1,0 +1,198 @@
+local args = {...}
+local CONFIG_URL = args[1] or ""
+
+local Players = game:GetService("Players")
+local LocalPlayer = Players.LocalPlayer
+local StarterGui = game:GetService("StarterGui")
+
+if not LocalPlayer then return end
+
+local IsKicked = false
+
+local function Notify(title, text, duration)
+    pcall(function()
+        StarterGui:SetCore("SendNotification", {
+            Title = title,
+            Text = text,
+            Duration = duration or 5
+        })
+    end)
+end
+
+local function FetchConfig(url)
+    if not url or url == "" then return nil end
+    local success, content = pcall(function()
+        return game:HttpGet(url)
+    end)
+    if not success then return nil end
+    local func, err = loadstring(content)
+    if not func then return nil end
+    local ok, result = pcall(func)
+    if ok and type(result) == "table" then
+        return result
+    end
+    return nil
+end
+
+local Config = FetchConfig(CONFIG_URL)
+if not Config then
+    Notify("Error", "Config load failed", 5)
+    return
+end
+
+local KickMap = {}
+if Config.Kick and type(Config.Kick) == "table" then
+    for uid, data in pairs(Config.Kick) do
+        if type(uid) == "number" and type(data) == "table" then
+            KickMap[uid] = data
+        end
+    end
+end
+
+local WarnMap = {}
+if Config.Warn and type(Config.Warn) == "table" then
+    for uid, data in pairs(Config.Warn) do
+        if type(uid) == "number" and type(data) == "table" then
+            WarnMap[uid] = data
+        end
+    end
+end
+
+local function CreateConfirmUI(player, kickReason, delay)
+    local playerGui = LocalPlayer:WaitForChild("PlayerGui")
+    local screenGui = Instance.new("ScreenGui")
+    screenGui.Name = "KickConfirm_" .. tostring(player.UserId)
+    screenGui.ResetOnSpawn = false
+    screenGui.ZIndexBehavior = Enum.ZIndexBehavior.Sibling
+    screenGui.Parent = playerGui
+
+    local frame = Instance.new("Frame")
+    frame.Size = UDim2.new(0, 320, 0, 160)
+    frame.Position = UDim2.new(0.5, -160, 0.5, -80)
+    frame.BackgroundColor3 = Color3.fromRGB(25, 25, 25)
+    frame.BorderSizePixel = 0
+    frame.Parent = screenGui
+
+    local corner = Instance.new("UICorner")
+    corner.CornerRadius = UDim.new(0, 10)
+    corner.Parent = frame
+
+    local stroke = Instance.new("UIStroke")
+    stroke.Color = Color3.fromRGB(255, 50, 50)
+    stroke.Thickness = 2
+    stroke.Parent = frame
+
+    local titleLabel = Instance.new("TextLabel")
+    titleLabel.Size = UDim2.new(1, -20, 0, 40)
+    titleLabel.Position = UDim2.new(0, 10, 0, 8)
+    titleLabel.BackgroundTransparency = 1
+    titleLabel.Text = "Confirm Kick"
+    titleLabel.TextColor3 = Color3.fromRGB(255, 255, 255)
+    titleLabel.TextScaled = true
+    titleLabel.Font = Enum.Font.GothamBold
+    titleLabel.Parent = frame
+
+    local msgLabel = Instance.new("TextLabel")
+    msgLabel.Size = UDim2.new(1, -20, 0, 50)
+    msgLabel.Position = UDim2.new(0, 10, 0, 50)
+    msgLabel.BackgroundTransparency = 1
+    msgLabel.Text = "Kick " .. player.Name .. "?"
+    msgLabel.TextColor3 = Color3.fromRGB(200, 200, 200)
+    msgLabel.TextScaled = true
+    msgLabel.Font = Enum.Font.Gotham
+    msgLabel.Parent = frame
+
+    local yesBtn = Instance.new("TextButton")
+    yesBtn.Size = UDim2.new(0, 130, 0, 44)
+    yesBtn.Position = UDim2.new(0, 15, 1, -54)
+    yesBtn.BackgroundColor3 = Color3.fromRGB(200, 50, 50)
+    yesBtn.Text = "YES"
+    yesBtn.TextColor3 = Color3.fromRGB(255, 255, 255)
+    yesBtn.TextScaled = true
+    yesBtn.Font = Enum.Font.GothamBold
+    yesBtn.Parent = frame
+
+    local yesCorner = Instance.new("UICorner")
+    yesCorner.CornerRadius = UDim.new(0, 8)
+    yesCorner.Parent = yesBtn
+
+    local noBtn = Instance.new("TextButton")
+    noBtn.Size = UDim2.new(0, 130, 0, 44)
+    noBtn.Position = UDim2.new(1, -145, 1, -54)
+    noBtn.BackgroundColor3 = Color3.fromRGB(80, 80, 80)
+    noBtn.Text = "NO"
+    noBtn.TextColor3 = Color3.fromRGB(255, 255, 255)
+    noBtn.TextScaled = true
+    noBtn.Font = Enum.Font.GothamBold
+    noBtn.Parent = frame
+
+    local noCorner = Instance.new("UICorner")
+    noCorner.CornerRadius = UDim.new(0, 8)
+    noCorner.Parent = noBtn
+
+    local confirmed = false
+    local dismissed = false
+
+    yesBtn.MouseButton1Click:Connect(function()
+        confirmed = true
+        screenGui:Destroy()
+    end)
+
+    noBtn.MouseButton1Click:Connect(function()
+        dismissed = true
+        screenGui:Destroy()
+    end)
+
+    while not confirmed and not dismissed do
+        task.wait()
+    end
+
+    if confirmed and not IsKicked then
+        IsKicked = true
+        if delay and delay > 0 then
+            task.wait(delay)
+        end
+        LocalPlayer:Kick(kickReason)
+    end
+end
+
+local function ProcessPlayer(player)
+    local kickData = KickMap[player.UserId]
+    if kickData then
+        if kickData.JoinAlert and kickData.JoinAlert ~= "" then
+            Notify("Alert", kickData.JoinAlert, 10)
+        end
+        if kickData.Confirm then
+            CreateConfirmUI(player, kickData.KickReason or "Kicked", kickData.Delay or 0)
+        else
+            if not IsKicked then
+                IsKicked = true
+                local delay = kickData.Delay or 0
+                if delay > 0 then
+                    task.wait(delay)
+                end
+                LocalPlayer:Kick(kickData.KickReason or "Kicked")
+            end
+        end
+        return
+    end
+
+    local warnData = WarnMap[player.UserId]
+    if warnData then
+        local text = player.Name
+        if warnData.Message and warnData.Message ~= "" then
+            text = text .. " | " .. warnData.Message
+        end
+        Notify("Warning", text, 10)
+    end
+end
+
+Players.PlayerAdded:Connect(ProcessPlayer)
+
+for _, player in ipairs(Players:GetPlayers()) do
+    task.spawn(function()
+        ProcessPlayer(player)
+    end)
+end
+
+Notify("System", "Active", 3)
