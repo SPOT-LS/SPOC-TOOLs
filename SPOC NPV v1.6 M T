@@ -267,7 +267,7 @@ local function loadSettingsPresets()
 						table.insert(settingsPresets, {
 							id = type(preset.id) == "string" and preset.id or HttpService:GenerateGUID(false),
 							name = preset.name,
-							data = preset.data,
+							data = cloneTable(preset.data),
 						})
 					end
 				end
@@ -1029,21 +1029,57 @@ local function recalcNextPresetId()
 	nextPresetId = maxId + 1
 end
 
+local function getTargetPartFunc(character, partName)
+	if not character then return nil end
+	if partName == "Torso" then
+		return character:FindFirstChild("Torso") or character:FindFirstChild("UpperTorso")
+	elseif partName == "HumanoidRootPart" then
+		return character:FindFirstChild("HumanoidRootPart")
+	elseif partName == "Left Arm" then
+		return character:FindFirstChild("LeftUpperArm") or character:FindFirstChild("Left Arm")
+	elseif partName == "Right Arm" then
+		return character:FindFirstChild("RightUpperArm") or character:FindFirstChild("Right Arm")
+	elseif partName == "Left Leg" then
+		return character:FindFirstChild("LeftLowerLeg") or character:FindFirstChild("Left Leg")
+	elseif partName == "Right Leg" then
+		return character:FindFirstChild("RightLowerLeg") or character:FindFirstChild("Right Leg")
+	elseif partName == "Head" then
+		return character:FindFirstChild("Head")
+	end
+	return nil
+end
+
+local function snapNum(v)
+	if type(v) == "number" then return v end
+	if type(v) == "string" then return tonumber(v) end
+	return nil
+end
+
 local function applyParamsSnapshot(data)
 	if type(data) ~= "table" then return end
-	if type(data.fovSize) == "number" then fovSize = math.clamp(math.floor(data.fovSize), 0, 1000) end
+	local nf = snapNum(data.fovSize)
+	if nf then fovSize = math.clamp(math.floor(nf), 0, 1000) end
 	if type(data.showFovCircle) == "boolean" then showFovCircle = data.showFovCircle end
 	if type(data.targetPart) == "string" then targetPart = data.targetPart end
-	if type(data.aimSpeed) == "number" then aimSpeed = math.clamp(math.round(data.aimSpeed * 10) / 10, 0.1, 1) end
+	local nas = snapNum(data.aimSpeed)
+	if nas then aimSpeed = math.clamp(math.round(nas * 10) / 10, 0.1, 1) end
 	if type(data.checkWalls) == "boolean" then checkWalls = data.checkWalls end
-	if type(data.npcSearchRange) == "number" then npcSearchRange = math.clamp(math.floor(data.npcSearchRange), 0, RANGE_MAX)
-	elseif type(data.playerSearchRange) == "number" then npcSearchRange = math.clamp(math.floor(data.playerSearchRange), 0, RANGE_MAX) end
+	local nr = snapNum(data.npcSearchRange)
+	if nr then npcSearchRange = math.clamp(math.floor(nr), 0, RANGE_MAX)
+	else
+		local pr = snapNum(data.playerSearchRange)
+		if pr then npcSearchRange = math.clamp(math.floor(pr), 0, RANGE_MAX) end
+	end
 	if type(data.predictionEnabled) == "boolean" then predictionEnabled = data.predictionEnabled end
-	if type(data.predictionAmount) == "number" then predictionAmount = math.clamp(math.round(data.predictionAmount * 100) / 100, 0, 50) end
+	local npa = snapNum(data.predictionAmount)
+	if npa then predictionAmount = math.clamp(math.round(npa * 100) / 100, 0, 50) end
 	if type(data.dropEnabled) == "boolean" then dropEnabled = data.dropEnabled end
-	if type(data.dropAmount) == "number" then dropAmount = math.clamp(math.round(data.dropAmount * 100) / 100, 0, 50) end
-	if type(data.dropFarBoost) == "number" then dropFarBoost = math.floor(data.dropFarBoost) end
-	if type(data.dropCloseCut) == "number" then dropCloseCut = math.floor(data.dropCloseCut) end
+	local nda = snapNum(data.dropAmount)
+	if nda then dropAmount = math.clamp(math.round(nda * 100) / 100, 0, 50) end
+	local nfb = snapNum(data.dropFarBoost)
+	if nfb then dropFarBoost = math.floor(nfb) end
+	local ncc = snapNum(data.dropCloseCut)
+	if ncc then dropCloseCut = math.floor(ncc) end
 	if type(data.ignoreCanCollideWalls) == "boolean" then ignoreCanCollideWalls = data.ignoreCanCollideWalls end
 	if type(data.ignoreTransparentWalls) == "boolean" then ignoreTransparentWalls = data.ignoreTransparentWalls end
 	if type(data.whitelist) == "table" then
@@ -1055,7 +1091,8 @@ local function applyParamsSnapshot(data)
 		end
 	end
 	if type(data.nearPriorityEnabled) == "boolean" then nearPriorityEnabled = data.nearPriorityEnabled end
-	if type(data.nearPriorityRange) == "number" then nearPriorityRange = math.clamp(math.floor(data.nearPriorityRange), 0, RANGE_MAX) end
+	local npr = snapNum(data.nearPriorityRange)
+	if npr then nearPriorityRange = math.clamp(math.floor(npr), 0, RANGE_MAX) end
 	if type(data.dropPresets) == "table" then
 		dropPresets = {}
 		for _, p in ipairs(data.dropPresets) do
@@ -1077,17 +1114,19 @@ local function applyParamsSnapshot(data)
 			toggleButton.Position = UDim2.new(p.xScale, p.xOffset, p.yScale, p.yOffset)
 		end
 	end
-	updateWhitelistDict()
-	wallCheckParamsVersion = wallCheckParamsVersion + 1
-	lastWallCheckVersion = wallCheckParamsVersion
-	for _, cached in pairs(cachedNPCs) do
-		if cached then
-			cached.lastWallCheck = 0
-			if cached.npc and cached.npc.Parent then
-				cached.targetPartObj = getTargetPartFunc(cached.npc, targetPart)
+	pcall(function()
+		updateWhitelistDict()
+		wallCheckParamsVersion = wallCheckParamsVersion + 1
+		lastWallCheckVersion = wallCheckParamsVersion
+		for _, cached in pairs(cachedNPCs) do
+			if cached then
+				cached.lastWallCheck = 0
+				if cached.npc and cached.npc.Parent then
+					cached.targetPartObj = getTargetPartFunc(cached.npc, targetPart)
+				end
 			end
 		end
-	end
+	end)
 	if refreshAllUI then refreshAllUI() end
 	if dropAdvFarBoostRefresh then dropAdvFarBoostRefresh() end
 	if dropAdvCloseCutRefresh then dropAdvCloseCutRefresh() end
@@ -1216,7 +1255,7 @@ refreshCfgPresetList = function()
 		dragHandle.TextSize = 12
 		dragHandle.Parent = row
 		local nameBtn = Instance.new("TextButton")
-		nameBtn.Size = UDim2.new(0, 98, 0, itemHeight)
+		nameBtn.Size = UDim2.new(1, -56, 0, itemHeight)
 		nameBtn.Position = UDim2.new(0, 20, 0, 0)
 		nameBtn.BackgroundColor3 = Color3.fromRGB(90, 90, 90)
 		nameBtn.TextColor3 = Color3.fromRGB(255, 255, 255)
@@ -1224,20 +1263,26 @@ refreshCfgPresetList = function()
 		nameBtn.Font = Enum.Font.SourceSans
 		nameBtn.TextSize = 11
 		nameBtn.TextXAlignment = Enum.TextXAlignment.Left
+		nameBtn.AutoButtonColor = false
+		nameBtn.ZIndex = 2
 		nameBtn.Parent = row
-		nameBtn.Activated:Connect(function()
-			if preset.data then
-				applyParamsSnapshot(preset.data)
+		local presetData = preset.data
+		local function applyCfgPreset()
+			if type(presetData) == "table" then
+				applyParamsSnapshot(presetData)
 			end
-		end)
+		end
+		nameBtn.Activated:Connect(applyCfgPreset)
+		nameBtn.MouseButton1Click:Connect(applyCfgPreset)
 		local renameBtn = Instance.new("TextButton")
 		renameBtn.Size = UDim2.new(0, 18, 0, itemHeight)
-		renameBtn.Position = UDim2.new(0, 120, 0, 0)
+		renameBtn.Position = UDim2.new(1, -38, 0, 0)
 		renameBtn.BackgroundColor3 = Color3.fromRGB(70, 70, 120)
 		renameBtn.TextColor3 = Color3.fromRGB(255, 255, 255)
 		renameBtn.Text = "E"
 		renameBtn.Font = Enum.Font.SourceSansBold
 		renameBtn.TextSize = 10
+		renameBtn.ZIndex = 3
 		renameBtn.Parent = row
 		renameBtn.Activated:Connect(function()
 			local renameBox = Instance.new("TextBox")
@@ -1265,12 +1310,13 @@ refreshCfgPresetList = function()
 		end)
 		local deleteBtn = Instance.new("TextButton")
 		deleteBtn.Size = UDim2.new(0, 18, 0, itemHeight)
-		deleteBtn.Position = UDim2.new(0, 140, 0, 0)
+		deleteBtn.Position = UDim2.new(1, -18, 0, 0)
 		deleteBtn.BackgroundColor3 = Color3.fromRGB(140, 40, 40)
 		deleteBtn.TextColor3 = Color3.fromRGB(255, 255, 255)
 		deleteBtn.Text = "X"
 		deleteBtn.Font = Enum.Font.SourceSansBold
 		deleteBtn.TextSize = 10
+		deleteBtn.ZIndex = 3
 		deleteBtn.Parent = row
 		deleteBtn.Activated:Connect(function()
 			table.remove(settingsPresets, i)
@@ -1610,7 +1656,7 @@ cfgPresetButton.Activated:Connect(function()
 			table.insert(settingsPresets, {
 				id = HttpService:GenerateGUID(false),
 				name = "Cfg " .. (#settingsPresets + 1),
-				data = captureParamsSnapshot(),
+				data = cloneTable(captureParamsSnapshot()),
 			})
 			persistSettingsPresets()
 			refreshCfgPresetList()
@@ -1691,26 +1737,6 @@ refreshFovVisibility = function()
 	elseif fovCircle then
 		fovCircle.Visible = false
 	end
-end
-
-local function getTargetPartFunc(character, partName)
-	if not character then return nil end
-	if partName == "Torso" then
-		return character:FindFirstChild("Torso") or character:FindFirstChild("UpperTorso")
-	elseif partName == "HumanoidRootPart" then
-		return character:FindFirstChild("HumanoidRootPart")
-	elseif partName == "Left Arm" then
-		return character:FindFirstChild("LeftUpperArm") or character:FindFirstChild("Left Arm")
-	elseif partName == "Right Arm" then
-		return character:FindFirstChild("RightUpperArm") or character:FindFirstChild("Right Arm")
-	elseif partName == "Left Leg" then
-		return character:FindFirstChild("LeftLowerLeg") or character:FindFirstChild("Left Leg")
-	elseif partName == "Right Leg" then
-		return character:FindFirstChild("RightLowerLeg") or character:FindFirstChild("Right Leg")
-	elseif partName == "Head" then
-		return character:FindFirstChild("Head")
-	end
-	return nil
 end
 
 local function resolveTargetVelocity(targetPartObj, targetRootPart, data)
