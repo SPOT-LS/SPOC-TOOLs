@@ -738,36 +738,16 @@ local nearRangeLabelRef = nil
 local nearRangeInputRef = nil
 local toggleNearPriButtonRef = nil
 local closeBottomPanels
+local BPanel = {id = nil, gen = 0, closing = false}
 
-local function getShellHeight(contentHeight)
-	return contentHeight + EXT_PAD
+local function syncBottomPanelButtons()
+	whitelistButton.Text = BPanel.id == "wl" and "PAV-1 WL ▲" or "PAV-1 WL ▼"
+	dropAdvButton.Text = BPanel.id == "drop" and "Drop Adv ▲" or "Drop Adv ▼"
+	nearButton.Text = BPanel.id == "near" and "Near ▲" or "Near ▼"
+	cfgPresetButton.Text = BPanel.id == "cfg" and "Cfg ▲" or "Cfg ▼"
 end
 
-local function animateShellOpen(shell, contentHeight)
-	shell.Size = UDim2.new(0, EXT_W, 0, 0)
-	local tween = TweenService:Create(shell, panelTweenInfo, {Size = UDim2.new(0, EXT_W, 0, getShellHeight(contentHeight))})
-	tween:Play()
-	return tween
-end
-
-local function animatePanelClose(panel, callback)
-	if not panel then
-		if callback then callback() end
-		return
-	end
-	local tween = TweenService:Create(panel, panelTweenInfo, {Size = UDim2.new(panel.Size.X.Scale, panel.Size.X.Offset, 0, 0)})
-	tween:Play()
-	tween.Completed:Connect(function()
-		panel:Destroy()
-		if callback then callback() end
-	end)
-end
-
-closeBottomPanels = function(callback)
-	local wl = whitelistShell
-	local da = dropAdvShell
-	local near = nearShell
-	local cfg = cfgPresetShell
+local function clearBottomPanelRefs()
 	whitelistShell = nil
 	whitelistScroll = nil
 	dropAdvShell = nil
@@ -784,30 +764,104 @@ closeBottomPanels = function(callback)
 	farBoostInputRef = nil
 	closeCutLabelRef = nil
 	closeCutInputRef = nil
-	whitelistButton.Text = "PAV-1 WL ▼"
-	dropAdvButton.Text = "Drop Adv ▼"
-	cfgPresetButton.Text = "Cfg ▼"
-	nearButton.Text = "Near ▼"
-	local pending = 0
-	if wl then pending = pending + 1 end
-	if da then pending = pending + 1 end
-	if near then pending = pending + 1 end
-	if cfg then pending = pending + 1 end
-	if pending == 0 then
+end
+
+local function destroyAllBottomPanelShells()
+	for _, child in ipairs(frame:GetChildren()) do
+		if child.Name == "BottomPanelShell" then
+			child:Destroy()
+		end
+	end
+end
+
+local function hardClearBottomPanels()
+	BPanel.gen = BPanel.gen + 1
+	BPanel.id = nil
+	BPanel.closing = false
+	clearBottomPanelRefs()
+	syncBottomPanelButtons()
+	destroyAllBottomPanelShells()
+end
+
+local function hasBottomPanelShell()
+	if whitelistShell or dropAdvShell or nearShell or cfgPresetShell then
+		return true
+	end
+	for _, child in ipairs(frame:GetChildren()) do
+		if child.Name == "BottomPanelShell" then
+			return true
+		end
+	end
+	return false
+end
+
+local function getShellHeight(contentHeight)
+	return contentHeight + EXT_PAD
+end
+
+local function animateShellOpen(shell, contentHeight)
+	shell.Size = UDim2.new(0, EXT_W, 0, 0)
+	local tween = TweenService:Create(shell, panelTweenInfo, {Size = UDim2.new(0, EXT_W, 0, getShellHeight(contentHeight))})
+	tween:Play()
+	return tween
+end
+
+local function animatePanelClose(panel, callback, gen)
+	if not panel or not panel.Parent then
 		if callback then callback() end
 		return
 	end
-	local finished = 0
-	local function onOneDone()
-		finished = finished + 1
-		if finished >= pending and callback then
-			callback()
+	local tween = TweenService:Create(panel, panelTweenInfo, {Size = UDim2.new(panel.Size.X.Scale, panel.Size.X.Offset, 0, 0)})
+	tween:Play()
+	tween.Completed:Connect(function()
+		if gen and gen ~= BPanel.gen then return end
+		if panel.Parent then panel:Destroy() end
+		if callback then callback() end
+	end)
+end
+
+closeBottomPanels = function(callback)
+	BPanel.gen = BPanel.gen + 1
+	local gen = BPanel.gen
+	BPanel.id = nil
+	BPanel.closing = true
+	local wl = whitelistShell
+	local da = dropAdvShell
+	local near = nearShell
+	local cfg = cfgPresetShell
+	clearBottomPanelRefs()
+	syncBottomPanelButtons()
+	local shells = {}
+	if wl then table.insert(shells, wl) end
+	if da then table.insert(shells, da) end
+	if near then table.insert(shells, near) end
+	if cfg then table.insert(shells, cfg) end
+	for _, child in ipairs(frame:GetChildren()) do
+		if child.Name == "BottomPanelShell" then
+			local tracked = false
+			for _, sh in ipairs(shells) do
+				if sh == child then tracked = true break end
+			end
+			if not tracked then table.insert(shells, child) end
 		end
 	end
-	if wl then animatePanelClose(wl, onOneDone) end
-	if da then animatePanelClose(da, onOneDone) end
-	if near then animatePanelClose(near, onOneDone) end
-	if cfg then animatePanelClose(cfg, onOneDone) end
+	if #shells == 0 then
+		BPanel.closing = false
+		if callback and gen == BPanel.gen then callback() end
+		return
+	end
+	local finished = 0
+	local pending = #shells
+	local function onOneDone()
+		finished = finished + 1
+		if finished >= pending then
+			BPanel.closing = false
+			if gen == BPanel.gen and callback then callback() end
+		end
+	end
+	for _, sh in ipairs(shells) do
+		animatePanelClose(sh, onOneDone, gen)
+	end
 end
 
 local function setExtensionExpanded(expanded, animate)
@@ -1337,16 +1391,12 @@ refreshCfgPresetList = function()
 	end
 end
 
-whitelistButton.Activated:Connect(function()
-	if not isExtensionExpanded then return end
-	if whitelistShell then
-		closeBottomPanels()
-		return
-	end
-	closeBottomPanels(function()
+local function openBottomPanelById(panelId, gen)
+	if gen ~= BPanel.gen or BPanel.id ~= panelId then return end
+	if panelId == "wl" then
 		updatePlayerNameCache()
-		whitelistButton.Text = "PAV-1 WL ▲"
 		whitelistShell = Instance.new("Frame")
+		whitelistShell.Name = "BottomPanelShell"
 		whitelistShell.Size = UDim2.new(0, EXT_W, 0, 0)
 		whitelistShell.Position = UDim2.new(0, EXT_MAIN_W, 0, EXT_PANEL_Y)
 		whitelistShell.BackgroundColor3 = MENU_BG_COLOR
@@ -1407,19 +1457,11 @@ whitelistButton.Activated:Connect(function()
 			end)
 		end
 		whitelistScroll.CanvasSize = UDim2.new(0, 0, 0, count * (itemHeight + uiListLayout.Padding.Offset))
+		
 		animateShellOpen(whitelistShell, WH_LIST_HEIGHT)
-	end)
-end)
-
-dropAdvButton.Activated:Connect(function()
-	if not isExtensionExpanded then return end
-	if dropAdvShell then
-		closeBottomPanels()
-		return
-	end
-	closeBottomPanels(function()
-		dropAdvButton.Text = "Drop Adv ▲"
+	elseif panelId == "drop" then
 		dropAdvShell = Instance.new("Frame")
+		dropAdvShell.Name = "BottomPanelShell"
 		dropAdvShell.Size = UDim2.new(0, EXT_W, 0, 0)
 		dropAdvShell.Position = UDim2.new(0, EXT_MAIN_W, 0, EXT_PANEL_Y)
 		dropAdvShell.BackgroundColor3 = MENU_BG_COLOR
@@ -1493,20 +1535,11 @@ dropAdvButton.Activated:Connect(function()
 		presetLayout.FillDirection = Enum.FillDirection.Vertical
 		presetLayout.Padding = UDim.new(0, 2)
 		refreshDropPresetList()
+		
 		animateShellOpen(dropAdvShell, DROP_ADV_HEIGHT)
-	end)
-end)
-
-
-nearButton.Activated:Connect(function()
-	if not isExtensionExpanded then return end
-	if nearShell then
-		closeBottomPanels()
-		return
-	end
-	closeBottomPanels(function()
-		nearButton.Text = "Near ▲"
+	elseif panelId == "near" then
 		nearShell = Instance.new("Frame")
+		nearShell.Name = "BottomPanelShell"
 		nearShell.Size = UDim2.new(0, EXT_W, 0, 0)
 		nearShell.Position = UDim2.new(0, EXT_MAIN_W, 0, EXT_PANEL_Y)
 		nearShell.BackgroundColor3 = MENU_BG_COLOR
@@ -1596,19 +1629,11 @@ nearButton.Activated:Connect(function()
 			applyNearRange(tonumber(nearRangeInputRef.Text))
 		end)
 		refreshNearPanelDisplays()
+		
 		animateShellOpen(nearShell, NEAR_PANEL_HEIGHT)
-	end)
-end)
-
-cfgPresetButton.Activated:Connect(function()
-	if not isExtensionExpanded then return end
-	if cfgPresetShell then
-		closeBottomPanels()
-		return
-	end
-	closeBottomPanels(function()
-		cfgPresetButton.Text = "Cfg ▲"
+	elseif panelId == "cfg" then
 		cfgPresetShell = Instance.new("Frame")
+		cfgPresetShell.Name = "BottomPanelShell"
 		cfgPresetShell.Size = UDim2.new(0, EXT_W, 0, 0)
 		cfgPresetShell.Position = UDim2.new(0, EXT_MAIN_W, 0, EXT_PANEL_Y)
 		cfgPresetShell.BackgroundColor3 = MENU_BG_COLOR
@@ -1657,8 +1682,49 @@ cfgPresetButton.Activated:Connect(function()
 		cfgLayout.FillDirection = Enum.FillDirection.Vertical
 		cfgLayout.Padding = UDim.new(0, 2)
 		refreshCfgPresetList()
+		
 		animateShellOpen(cfgPresetShell, CFG_PANEL_HEIGHT)
-	end)
+	end
+end
+
+local function onBottomPanelButton(panelId)
+	if not isExtensionExpanded then return end
+	if BPanel.closing then
+		hardClearBottomPanels()
+	end
+	local hasShell = hasBottomPanelShell()
+	if BPanel.id == panelId and hasShell then
+		closeBottomPanels()
+		return
+	end
+	if hasShell then
+		hardClearBottomPanels()
+	end
+	if BPanel.id == panelId and not hasShell then
+		BPanel.id = nil
+		syncBottomPanelButtons()
+	end
+	BPanel.gen = BPanel.gen + 1
+	local gen = BPanel.gen
+	BPanel.id = panelId
+	syncBottomPanelButtons()
+	openBottomPanelById(panelId, gen)
+end
+
+whitelistButton.Activated:Connect(function()
+	onBottomPanelButton("wl")
+end)
+
+dropAdvButton.Activated:Connect(function()
+	onBottomPanelButton("drop")
+end)
+
+nearButton.Activated:Connect(function()
+	onBottomPanelButton("near")
+end)
+
+cfgPresetButton.Activated:Connect(function()
+	onBottomPanelButton("cfg")
 end)
 
 function createFovCircle()
