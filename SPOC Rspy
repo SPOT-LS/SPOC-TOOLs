@@ -2424,8 +2424,6 @@ function backgroundUserInput(input)
                 end
             end
         end))
-    elseif isInDragRange(mousePos) then
-        onBarInput(input)
     end
 end
 
@@ -3696,13 +3694,46 @@ if not getgenv().SimpleSpyExecuted then
             ScrollingFrame.ScrollingDirection = Enum.ScrollingDirection.Y
             ScrollingFrame.ElasticBehavior = Enum.ElasticBehavior.Always
         end)
-        if isMobileLike() then
-            pcall(function()
-                Background.Draggable = true
-                Background.Active = true
-            end)
-        end
+        pcall(function()
+            Background.Draggable = false
+            Background.Active = true
+            TopBar.Active = true
+            TopBar.Draggable = false
+        end)
         table.insert(connections, UserInputService.InputBegan:Connect(backgroundUserInput))
+        local function topBarDragInput(input)
+            if input.UserInputType ~= Enum.UserInputType.MouseButton1 and input.UserInputType ~= Enum.UserInputType.Touch then
+                return
+            end
+            local pos = input.Position
+            local ap = TopBar.AbsolutePosition
+            local asz = TopBar.AbsoluteSize
+            local btnW = CloseButton.AbsoluteSize.X * 3
+            if pos.X >= ap.X and pos.X <= ap.X + asz.X - btnW and pos.Y >= ap.Y and pos.Y <= ap.Y + asz.Y then
+                onBarInput(input)
+            end
+        end
+        local DragPad = Instance.new("TextButton")
+        DragPad.Name = "DragPad"
+        DragPad.BackgroundTransparency = 1
+        DragPad.Text = ""
+        DragPad.AutoButtonColor = false
+        DragPad.Active = true
+        DragPad.ZIndex = 0
+        DragPad.Size = UDim2.new(1, -CloseButton.AbsoluteSize.X * 3, 1, 0)
+        DragPad.Position = UDim2.new(0, 0, 0, 0)
+        DragPad.Parent = TopBar
+        Simple.ZIndex = 2
+        StatusLabel.ZIndex = 2
+        CloseButton.ZIndex = 3
+        MaximizeButton.ZIndex = 3
+        MinimizeButton.ZIndex = 3
+        table.insert(connections, DragPad.InputBegan:Connect(topBarDragInput))
+        table.insert(connections, TopBar.InputBegan:Connect(topBarDragInput))
+        pcall(function()
+            StatusLabel.Active = true
+            StatusLabel.InputBegan:Connect(topBarDragInput)
+        end)
         connectResize()
         logthread(spawn(function()
             delay(1,onToggleButtonUnhover)
@@ -4131,8 +4162,9 @@ if configs.supersecretdevtoggle then
 end
 
 if isMobileLike() then
-    Background.Draggable = true
+    Background.Draggable = false
     Background.Active = true
+    TopBar.Active = true
     local QuickCapture = Instance.new("TextButton")
     local UICorner = Instance.new("UICorner")
     QuickCapture.Parent = SimpleSpy3
