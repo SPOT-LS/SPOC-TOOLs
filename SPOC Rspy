@@ -2079,53 +2079,65 @@ function bringBackOnResize()
     TweenService.Create(TweenService, Background, TweenInfo.new(0.1), {Position = UDim2.new(0, currentX, 0, currentY)}):Play()
 end
 
---- Drags gui (so long as mouse is held down)
---- @param input InputObject
-function onBarInput(input)
-    if input.UserInputType == Enum.UserInputType.MouseButton1 or input.UserInputType == Enum.UserInputType.Touch then
-        local lastPos = UserInputService:GetMouseLocation()
-        local mainPos = Background.AbsolutePosition
-        local offset = mainPos - lastPos
-        local currentPos = offset + lastPos
-        if not connections["drag"] then
-            connections["drag"] = RunService.RenderStepped:Connect(function()
-                local newPos = UserInputService:GetMouseLocation()
-                if newPos ~= lastPos then
-                    local currentX = (offset + newPos).X
-                    local currentY = (offset + newPos).Y
-                    local viewportSize = workspace.CurrentCamera.ViewportSize
-                    if (currentX < 0 and currentX < currentPos.X) or (currentX > (viewportSize.X - (sideClosed and 131 or TopBar.AbsoluteSize.X)) and currentX > currentPos.X) then
-                        if currentX < 0 then
-                            currentX = 0
-                        else
-                            currentX = viewportSize.X - (sideClosed and 131 or TopBar.AbsoluteSize.X)
-                        end
-                    end
-                    if (currentY < 0 and currentY < currentPos.Y) or (currentY > (viewportSize.Y - (closed and 19 or Background.AbsoluteSize.Y) - GuiInset.Y) and currentY > currentPos.Y) then
-                        if currentY < 0 then
-                            currentY = 0
-                        else
-                            currentY = viewportSize.Y - (closed and 19 or Background.AbsoluteSize.Y) - GuiInset.Y
-                        end
-                    end
-                    currentPos = Vector2.new(currentX, currentY)
-                    lastPos = newPos
-                    TweenService.Create(TweenService, Background, TweenInfo.new(0.1), {Position = UDim2.new(0, currentPos.X, 0, currentPos.Y)}):Play()
-                end
-                    -- if input.UserInputState ~= Enum.UserInputState.Begin then
-                    --     RunService.UnbindFromRenderStep(RunService, "drag")
-                    -- end
-            end)
-        end
-        table.insert(connections, UserInputService.InputEnded:Connect(function(inputE)
-            if input == inputE then
-                if connections["drag"] then
-                    connections["drag"]:Disconnect()
-                    connections["drag"] = nil
-                end
-            end
-        end))
+local function stopWindowDrag()
+    if connections["drag"] then
+        pcall(function()
+            connections["drag"]:Disconnect()
+        end)
+        connections["drag"] = nil
     end
+    if connections["drag_end"] then
+        pcall(function()
+            connections["drag_end"]:Disconnect()
+        end)
+        connections["drag_end"] = nil
+    end
+end
+
+function onBarInput(input)
+    if input.UserInputType ~= Enum.UserInputType.MouseButton1 and input.UserInputType ~= Enum.UserInputType.Touch then
+        return
+    end
+    if input.UserInputState and input.UserInputState ~= Enum.UserInputState.Begin then
+        return
+    end
+    stopWindowDrag()
+    local startTouch = Vector2.new(input.Position.X, input.Position.Y)
+    local startGui = Background.AbsolutePosition
+    local dragging = true
+
+    local function clampPos(x, y)
+        local viewportSize = workspace.CurrentCamera.ViewportSize
+        local maxX = viewportSize.X - (sideClosed and 131 or TopBar.AbsoluteSize.X)
+        local maxY = viewportSize.Y - (closed and TopBar.AbsoluteSize.Y or Background.AbsoluteSize.Y)
+        if x < 0 then x = 0 end
+        if y < 0 then y = 0 end
+        if x > maxX then x = maxX end
+        if y > maxY then y = maxY end
+        return x, y
+    end
+
+    connections["drag"] = UserInputService.InputChanged:Connect(function(change)
+        if not dragging then
+            return
+        end
+        if change.UserInputType ~= Enum.UserInputType.MouseMovement and change.UserInputType ~= Enum.UserInputType.Touch then
+            return
+        end
+        if input.UserInputType == Enum.UserInputType.Touch and change.UserInputType ~= Enum.UserInputType.Touch then
+            return
+        end
+        local pos = Vector2.new(change.Position.X, change.Position.Y)
+        local x, y = clampPos(startGui.X + (pos.X - startTouch.X), startGui.Y + (pos.Y - startTouch.Y))
+        Background.Position = UDim2.fromOffset(x, y)
+    end)
+
+    connections["drag_end"] = UserInputService.InputEnded:Connect(function(ended)
+        if ended.UserInputType == Enum.UserInputType.MouseButton1 or ended.UserInputType == Enum.UserInputType.Touch then
+            dragging = false
+            stopWindowDrag()
+        end
+    end)
 end
 
 --- Fades out the table of elements (and makes them invisible), returns a function to make them visible again
@@ -2295,6 +2307,13 @@ end
 --- Called when mouse enters SimpleSpy
 local customCursor = Create("ImageLabel",{Parent = SimpleSpy3,Visible = false,Size = UDim2.fromOffset(200, 200),ZIndex = 1e9,BackgroundTransparency = 1,Image = "",Parent = SimpleSpy3})
 function mouseEntered()
+    if isMobileLike() then
+        pcall(function()
+            UserInputService.MouseIconEnabled = true
+        end)
+        customCursor.Visible = false
+        return
+    end
     local con = connections["SIMPLESPY_CURSOR"]
     if con then
         con:Disconnect()
@@ -3622,9 +3641,17 @@ if not getgenv().SimpleSpyExecuted then
             if not parent then
                 error("SimpleSpy: no valid Gui parent (PlayerGui/CoreGui)")
             end
+            pcall(function()
+                SimpleSpy3.ResetOnSpawn = false
+                SimpleSpy3.ZIndexBehavior = Enum.ZIndexBehavior.Sibling
+                SimpleSpy3.DisplayOrder = 999
+                SimpleSpy3.IgnoreGuiInset = true
+            end)
             SimpleSpy3.Parent = parent
             SimpleSpy3.Enabled = true
             Background.Visible = true
+            Background.Active = false
+            Background.Draggable = false
         end
 
         local okHL, hlOrErr = pcall(function()
@@ -3696,22 +3723,27 @@ if not getgenv().SimpleSpyExecuted then
         end)
         pcall(function()
             Background.Draggable = false
-            Background.Active = true
+            Background.Active = false
             TopBar.Active = true
             TopBar.Draggable = false
+            LeftPanel.Active = false
+            RightPanel.Active = false
+            CodeBox.Active = false
+            SimpleSpy3.DisplayOrder = 999
+            SimpleSpy3.IgnoreGuiInset = true
+            customCursor.Visible = false
+            customCursor.Active = false
+            ToolTip.Active = false
+            UserInputService.MouseIconEnabled = true
         end)
-        table.insert(connections, UserInputService.InputBegan:Connect(backgroundUserInput))
+        if not isMobileLike() then
+            table.insert(connections, UserInputService.InputBegan:Connect(backgroundUserInput))
+        end
         local function topBarDragInput(input)
             if input.UserInputType ~= Enum.UserInputType.MouseButton1 and input.UserInputType ~= Enum.UserInputType.Touch then
                 return
             end
-            local pos = input.Position
-            local ap = TopBar.AbsolutePosition
-            local asz = TopBar.AbsoluteSize
-            local btnW = CloseButton.AbsoluteSize.X * 3
-            if pos.X >= ap.X and pos.X <= ap.X + asz.X - btnW and pos.Y >= ap.Y and pos.Y <= ap.Y + asz.Y then
-                onBarInput(input)
-            end
+            onBarInput(input)
         end
         local DragPad = Instance.new("TextButton")
         DragPad.Name = "DragPad"
@@ -3719,8 +3751,9 @@ if not getgenv().SimpleSpyExecuted then
         DragPad.Text = ""
         DragPad.AutoButtonColor = false
         DragPad.Active = true
-        DragPad.ZIndex = 0
-        DragPad.Size = UDim2.new(1, -CloseButton.AbsoluteSize.X * 3, 1, 0)
+        DragPad.Selectable = false
+        DragPad.ZIndex = 1
+        DragPad.Size = UDim2.new(1, -90, 1, 0)
         DragPad.Position = UDim2.new(0, 0, 0, 0)
         DragPad.Parent = TopBar
         Simple.ZIndex = 2
@@ -3729,11 +3762,6 @@ if not getgenv().SimpleSpyExecuted then
         MaximizeButton.ZIndex = 3
         MinimizeButton.ZIndex = 3
         table.insert(connections, DragPad.InputBegan:Connect(topBarDragInput))
-        table.insert(connections, TopBar.InputBegan:Connect(topBarDragInput))
-        pcall(function()
-            StatusLabel.Active = true
-            StatusLabel.InputBegan:Connect(topBarDragInput)
-        end)
         connectResize()
         logthread(spawn(function()
             delay(1,onToggleButtonUnhover)
@@ -3766,6 +3794,14 @@ if not getgenv().SimpleSpyExecuted then
     if succeeded then
         getgenv().SimpleSpyExecuted = true
         warn("[SimpleSpy] started OK")
+        pcall(function()
+            LogList.Active = true
+            ScrollingFrame.Active = true
+            Background.Active = false
+            Background.Draggable = false
+            UserInputService.MouseIconEnabled = true
+            stopWindowDrag()
+        end)
         if isMobileLike() then
             pcall(function()
                 CloseButton.Size = UDim2.new(0, 28, 0, 28)
@@ -4163,8 +4199,12 @@ end
 
 if isMobileLike() then
     Background.Draggable = false
-    Background.Active = true
+    Background.Active = false
     TopBar.Active = true
+    pcall(function()
+        UserInputService.MouseIconEnabled = true
+        customCursor.Visible = false
+    end)
     local QuickCapture = Instance.new("TextButton")
     local UICorner = Instance.new("UICorner")
     QuickCapture.Parent = SimpleSpy3
