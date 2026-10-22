@@ -1,0 +1,921 @@
+--[[
+  CVT — 枪械摄像头后坐力强移除 v0.7 Mobile
+  Same logic as v0.7 PC, mobile adaptations:
+    - Look: finger swipe (prefer right ~65% of screen; ignore UI finger)
+    - Lock FOV check uses screen center (mobile crosshair)
+    - UI ~0.82 scale, touch-friendly
+    - Touch down/up also feeds FIRE gate (no RMB on phone)
+]]
+
+local G = (getgenv and getgenv()) or _G
+if type(G.__ACS_CAMCANCEL_STOP) == "function" then
+	pcall(G.__ACS_CAMCANCEL_STOP)
+end
+
+local Players = game:GetService("Players")
+local RS = game:GetService("RunService")
+local UIS = game:GetService("UserInputService")
+local CoreGui = game:GetService("CoreGui")
+local GuiService = game:GetService("GuiService")
+local LP = Players.LocalPlayer
+
+local UI_SCALE = 0.82
+
+local CFG = {
+	Marker = "ACS_CamRecoilCancelUI_Mobile",
+	MouseSens = 0.005,
+	PitchMin = math.rad(-89),
+	PitchMax = math.rad(89),
+	FpFocusMax = 1.75,
+	ResyncYawDeg = 25,
+	AngleEps = 1e-4,
+	PavScanSec = 0.5,
+	LockDot = 0.991,
+	LockFovDefault = 48,
+	NpcScanSec = 0.35,
+	-- left side usually joystick; look swipe from this X fraction
+	LookZoneX = 0.35,
+}
+
+local PAV_AIM_ON = {
+	["Disable Player Aim"] = true,
+	["Disable NPC Aim"] = true,
+}
+local PAV_AIM_OFF = {
+	["Enable Player Aim"] = true,
+	["Enable NPC Aim"] = true,
+}
+
+local GATE = "GUN"
+
+local S = {
+	Gui = nil,
+	Frame = nil,
+	Status = nil,
+	Enabled = true,
+	Pitch = 0,
+	Yaw = 0,
+	Inited = false,
+	Active = false,
+	WasActive = false,
+	Yielding = false,
+	PavAim = false,
+	PavLock = false,
+	PavFovPx = 48,
+	PavBtn = nil,
+	PavFovLabel = nil,
+	PavBtnConn = nil,
+	PavScanAt = 0,
+	NpcHeads = {},
+	NpcScanAt = 0,
+	MouseDX = 0,
+	MouseDY = 0,
+	Firing = false,
+	Aiming = false,
+	BaseFov = nil,
+	FovLocked = false,
+	Stats = { kick = 0, writes = 0, yield = 0 },
+	StatClock = 0,
+	Binds = {},
+	Conns = {},
+	Stopped = false,
+	-- touch
+	LookInput = nil,
+	UiDragging = false,
+	UiDragStart = nil,
+	UiFramePos = nil,
+	FireTouches = 0,
+}
+
+local function Cam()
+	return workspace.CurrentCamera
+end
+
+local function SetStatus(msg)
+	if S.Status then
+		pcall(function()
+			S.Status.Text = tostring(msg)
+		end)
+	end
+end
+
+local function PublishState()
+	G.__CAMCANCEL_STATE = {
+		Enabled = S.Enabled,
+		Active = S.Active,
+		Yielding = S.Yielding,
+		PavAim = S.PavAim,
+		PavLock = S.PavLock,
+		Gate = GATE,
+		Pitch = S.Pitch,
+		Yaw = S.Yaw,
+		Ver = "0.7-M",
+		Mobile = true,
+	}
+end
+
+local function ClampPitch(p)
+	return math.clamp(p, CFG.PitchMin, CFG.PitchMax)
+end
+
+local function InitAnglesFromCam()
+	local c = Cam()
+	if not c then
+		return
+	end
+	local p, y = c.CFrame:ToOrientation()
+	S.Pitch, S.Yaw = p, y
+	S.Inited = true
+	S.MouseDX, S.MouseDY = 0, 0
+end
+
+local function IsFirstPerson()
+	local c = Cam()
+	if not c then
+		return false
+	end
+	local ok, dist = pcall(function()
+		return (c.CFrame.Position - c.Focus.Position).Magnitude
+	end)
+	return ok and dist < CFG.FpFocusMax
+end
+
+local function HasTool()
+	local char = LP.Character
+	if not char then
+		return false
+	end
+	for _, ch in ipairs(char:GetChildren()) do
+		if ch:IsA("Tool") then
+			return true
+		end
+	end
+	return false
+end
+
+local function ShouldBeActive()
+	if not S.Enabled then
+		return false
+	end
+	if GATE == "ALWAYS" then
+		return true
+	end
+	if GATE == "FIRE" then
+		return S.Firing or S.Aiming or S.FireTouches > 0
+	end
+	if GATE == "FP" then
+		return IsFirstPerson()
+	end
+	return HasTool()
+end
+
+local function HandshakeYield()
+	if G.__CAMCANCEL_YIELD == true then
+		return true
+	end
+	if G.__PAV_AIMING == true or G.__SPOC_AIMING == true then
+		return true
+	end
+	local st = G.__PAV_STATE or G.__SPOC_STATE
+	if type(st) == "table" then
+		if st.aiming == true or st.Aiming == true then
+			return true
+		end
+		if st.isSilentAimEnabled == true or st.isHoldingAim == true then
+			return true
+		end
+	end
+	return false
+end
+
+local function ReadPavBtn(btn)
+	if not btn or not btn.Parent then
+		return nil
+	end
+	local ok, t = pcall(function()
+		return btn.Text
+	end)
+	if not ok or type(t) ~= "string" then
+		return nil
+	end
+	if PAV_AIM_ON[t] then
+		return true
+	end
+	if PAV_AIM_OFF[t] then
+		return false
+	end
+	return nil
+end
+
+local function BindPavBtn(btn)
+	if S.PavBtnConn then
+		pcall(function()
+			S.PavBtnConn:Disconnect()
+		end)
+		S.PavBtnConn = nil
+	end
+	S.PavBtn = btn
+	if not btn then
+		return
+	end
+	local ok, conn = pcall(function()
+		return btn:GetPropertyChangedSignal("Text"):Connect(function()
+			local v = ReadPavBtn(btn)
+			if v ~= nil then
+				S.PavAim = v
+				if not v then
+					InitAnglesFromCam()
+				end
+			end
+		end)
+	end)
+	if ok then
+		S.PavBtnConn = conn
+	end
+end
+
+local function GuiRoots()
+	local roots = {}
+	pcall(function()
+		roots[#roots + 1] = CoreGui
+	end)
+	pcall(function()
+		local pg = LP:FindFirstChild("PlayerGui")
+		if pg then
+			roots[#roots + 1] = pg
+		end
+	end)
+	pcall(function()
+		if gethui then
+			roots[#roots + 1] = gethui()
+		end
+	end)
+	return roots
+end
+
+local function ReadFovFromLabel(label)
+	if not label or not label.Parent then
+		return nil
+	end
+	local ok, t = pcall(function()
+		return label.Text
+	end)
+	if not ok or type(t) ~= "string" then
+		return nil
+	end
+	local n = string.match(t, "FOV Size:%s*(%d+)")
+	if n then
+		return tonumber(n)
+	end
+	return nil
+end
+
+local function AttachFovLabel(btn)
+	S.PavFovLabel = nil
+	S.PavFovPx = CFG.LockFovDefault
+	if not btn or not btn.Parent then
+		return
+	end
+	for _, ch in ipairs(btn.Parent:GetChildren()) do
+		if ch:IsA("TextLabel") then
+			local n = ReadFovFromLabel(ch)
+			if n then
+				S.PavFovLabel = ch
+				S.PavFovPx = n
+				return
+			end
+		end
+	end
+end
+
+local function FullScanPavBtn()
+	for _, root in ipairs(GuiRoots()) do
+		local ok, descs = pcall(function()
+			return root:GetDescendants()
+		end)
+		if ok and descs then
+			for i = 1, #descs do
+				local d = descs[i]
+				if d:IsA("TextButton") then
+					local v = ReadPavBtn(d)
+					if v ~= nil then
+						BindPavBtn(d)
+						AttachFovLabel(d)
+						S.PavAim = v
+						return
+					end
+				end
+			end
+		end
+	end
+	BindPavBtn(nil)
+	S.PavFovLabel = nil
+	S.PavAim = false
+	S.PavFovPx = CFG.LockFovDefault
+end
+
+local function RefreshPavAim()
+	local now = os.clock()
+	local cached = ReadPavBtn(S.PavBtn)
+	if cached ~= nil then
+		S.PavAim = cached
+		local fov = ReadFovFromLabel(S.PavFovLabel)
+		if fov then
+			S.PavFovPx = fov
+		end
+		S.PavScanAt = now
+		return
+	end
+	if now - S.PavScanAt < CFG.PavScanSec then
+		return
+	end
+	S.PavScanAt = now
+	FullScanPavBtn()
+end
+
+local function RefreshNpcHeads()
+	local now = os.clock()
+	if now - S.NpcScanAt < CFG.NpcScanSec then
+		return
+	end
+	S.NpcScanAt = now
+	local list = {}
+	local myChar = LP.Character
+	local budget = 80
+	local function consider(model)
+		if model == myChar or budget <= 0 then
+			return
+		end
+		local hum = model:FindFirstChildOfClass("Humanoid")
+		local head = model:FindFirstChild("Head")
+		if hum and head and hum.Health > 0 then
+			budget = budget - 1
+			list[#list + 1] = head
+		end
+	end
+	for _, plr in ipairs(Players:GetPlayers()) do
+		if plr ~= LP and plr.Character then
+			consider(plr.Character)
+		end
+	end
+	for _, ch in ipairs(workspace:GetChildren()) do
+		if ch:IsA("Model") then
+			consider(ch)
+		elseif ch:IsA("Folder") then
+			for _, sub in ipairs(ch:GetChildren()) do
+				if sub:IsA("Model") then
+					consider(sub)
+				end
+			end
+		end
+	end
+	S.NpcHeads = list
+end
+
+-- Mobile: treat screen center as crosshair for PAV FOV lock test
+local function AimScreen()
+	local c = Cam()
+	if c then
+		local vs = c.ViewportSize
+		if vs and vs.X > 0 then
+			return Vector2.new(vs.X * 0.5, vs.Y * 0.5)
+		end
+	end
+	local p = UIS:GetMouseLocation()
+	return Vector2.new(p.X, p.Y)
+end
+
+local function IsPavLockingTarget()
+	local c = Cam()
+	if not c then
+		return false
+	end
+	RefreshNpcHeads()
+	local origin = c.CFrame.Position
+	local look = c.CFrame.LookVector
+	local aim = AimScreen()
+	local fov = S.PavFovPx or CFG.LockFovDefault
+	local bestDot = CFG.LockDot
+	local locked = false
+	local heads = S.NpcHeads
+	for i = 1, #heads do
+		local head = heads[i]
+		if head and head.Parent then
+			local pos = head.Position
+			local sp, onScreen = c:WorldToViewportPoint(pos)
+			if onScreen and sp.Z > 0 then
+				local dist = (Vector2.new(sp.X, sp.Y) - aim).Magnitude
+				if dist <= fov then
+					local to = pos - origin
+					local mag = to.Magnitude
+					if mag > 1e-3 then
+						local dot = look:Dot(to / mag)
+						if dot >= bestDot then
+							locked = true
+							bestDot = dot
+						end
+					end
+				end
+			end
+		end
+	end
+	return locked
+end
+
+local function ShouldYieldToPav()
+	RefreshPavAim()
+	if HandshakeYield() then
+		S.PavLock = true
+		return true
+	end
+	if S.PavAim ~= true then
+		S.PavLock = false
+		return false
+	end
+	local locking = IsPavLockingTarget()
+	S.PavLock = locking
+	return locking
+end
+
+local function BeginFovLock()
+	local c = Cam()
+	if not c or S.FovLocked then
+		return
+	end
+	S.BaseFov = c.FieldOfView
+	S.FovLocked = true
+end
+
+local function EndFovLock()
+	S.FovLocked = false
+	S.BaseFov = nil
+end
+
+local function ConsumeMouse()
+	local dx, dy = S.MouseDX, S.MouseDY
+	S.MouseDX, S.MouseDY = 0, 0
+	return dx, dy
+end
+
+local function PointOnFrame(screenPos)
+	local fr = S.Frame
+	if not fr then
+		return false
+	end
+	local inset = GuiService:GetGuiInset()
+	local p = Vector2.new(screenPos.X - inset.X, screenPos.Y - inset.Y)
+	local ap = fr.AbsolutePosition
+	local as = fr.AbsoluteSize
+	return p.X >= ap.X and p.X <= ap.X + as.X and p.Y >= ap.Y and p.Y <= ap.Y + as.Y
+end
+
+local function InLookZone(screenPos)
+	local c = Cam()
+	local vs = c and c.ViewportSize
+	if not vs or vs.X <= 0 then
+		return true
+	end
+	return screenPos.X >= vs.X * CFG.LookZoneX
+end
+
+local function ApplyHard(lastPass)
+	if S.Stopped or not S.Enabled then
+		return
+	end
+
+	local c = Cam()
+	if not c then
+		return
+	end
+
+	local wantActive = ShouldBeActive()
+	S.Active = wantActive
+	S.Yielding = false
+
+	if not wantActive then
+		if S.WasActive then
+			EndFovLock()
+			InitAnglesFromCam()
+		end
+		S.WasActive = false
+		ConsumeMouse()
+		PublishState()
+		return
+	end
+
+	if not S.WasActive then
+		InitAnglesFromCam()
+		BeginFovLock()
+	end
+	S.WasActive = true
+	if not S.Inited then
+		InitAnglesFromCam()
+	end
+
+	if ShouldYieldToPav() then
+		if not lastPass then
+			return
+		end
+		ConsumeMouse()
+		InitAnglesFromCam()
+		S.Yielding = true
+		S.Stats.yield = S.Stats.yield + 1
+		PublishState()
+		return
+	end
+
+	local dx, dy = ConsumeMouse()
+	if dx ~= 0 or dy ~= 0 then
+		S.Yaw = S.Yaw - dx * CFG.MouseSens
+		S.Pitch = ClampPitch(S.Pitch - dy * CFG.MouseSens)
+	end
+
+	do
+		local _, cy = c.CFrame:ToOrientation()
+		local dyaw = math.abs(cy - S.Yaw)
+		if dyaw > math.pi then
+			dyaw = math.abs(dyaw - math.pi * 2)
+		end
+		if dx == 0 and dy == 0 and math.deg(dyaw) > CFG.ResyncYawDeg then
+			InitAnglesFromCam()
+		end
+	end
+
+	local got = c.CFrame
+	local p0, y0, r0 = got:ToOrientation()
+	local needWrite = math.abs(p0 - S.Pitch) > CFG.AngleEps
+		or math.abs(y0 - S.Yaw) > CFG.AngleEps
+		or math.abs(r0) > CFG.AngleEps
+
+	if needWrite then
+		S.Stats.kick = S.Stats.kick + math.abs(p0 - S.Pitch) + math.abs(r0)
+		S.Stats.writes = S.Stats.writes + 1
+		c.CFrame = CFrame.new(got.Position) * CFrame.fromEulerAnglesYXZ(S.Pitch, S.Yaw, 0)
+	end
+
+	if S.FovLocked and S.BaseFov and math.abs(c.FieldOfView - S.BaseFov) > 0.01 then
+		c.FieldOfView = S.BaseFov
+	end
+	PublishState()
+end
+
+local function UnbindAll()
+	for name in pairs(S.Binds) do
+		pcall(function()
+			RS:UnbindFromRenderStep(name)
+		end)
+	end
+	S.Binds = {}
+end
+
+local function BindHard()
+	UnbindAll()
+	local n1, n2 = "CamCancel_H1_M", "CamCancel_H2_M"
+	RS:BindToRenderStep(n1, Enum.RenderPriority.Camera.Value + 1, function()
+		ApplyHard(false)
+	end)
+	RS:BindToRenderStep(n2, Enum.RenderPriority.Last.Value, function()
+		ApplyHard(true)
+	end)
+	S.Binds[n1] = true
+	S.Binds[n2] = true
+end
+
+local function DisconnectAll()
+	for _, c in pairs(S.Conns) do
+		pcall(function()
+			c:Disconnect()
+		end)
+	end
+	S.Conns = {}
+	if S.PavBtnConn then
+		pcall(function()
+			S.PavBtnConn:Disconnect()
+		end)
+		S.PavBtnConn = nil
+	end
+end
+
+local function DestroyUi()
+	if S.Gui then
+		pcall(function()
+			S.Gui:Destroy()
+		end)
+		S.Gui = nil
+		S.Frame = nil
+	end
+end
+
+local function Stop()
+	S.Stopped = true
+	S.Enabled = false
+	UnbindAll()
+	DisconnectAll()
+	EndFovLock()
+	DestroyUi()
+	G.__CAMCANCEL_STATE = nil
+	print("[CVT CamCancel] v0.7 Mobile stopped")
+end
+
+G.__ACS_CAMCANCEL_STOP = Stop
+
+local function Parent(gui)
+	pcall(function()
+		if gethui then
+			gui.Parent = gethui()
+			return
+		end
+	end)
+	if not gui.Parent then
+		pcall(function()
+			gui.Parent = CoreGui
+		end)
+	end
+	if not gui.Parent then
+		pcall(function()
+			gui.Parent = LP:WaitForChild("PlayerGui")
+		end)
+	end
+end
+
+local COL = {
+	bg = Color3.fromRGB(12, 12, 12),
+	btn = Color3.fromRGB(28, 28, 28),
+	fg = Color3.fromRGB(210, 210, 210),
+	dim = Color3.fromRGB(140, 140, 140),
+	line = Color3.fromRGB(40, 40, 40),
+}
+
+local function U(n)
+	return math.floor(n * UI_SCALE + 0.5)
+end
+
+local function MkBtn(parent, text, y, h, cb)
+	local b = Instance.new("TextButton")
+	b.Size = UDim2.new(1, -U(8), 0, h)
+	b.Position = UDim2.new(0, U(4), 0, y)
+	b.BackgroundColor3 = COL.btn
+	b.BorderSizePixel = 1
+	b.BorderColor3 = COL.line
+	b.AutoButtonColor = true
+	b.Font = Enum.Font.Code
+	b.TextSize = U(11)
+	b.TextColor3 = COL.fg
+	b.Text = text
+	b.Parent = parent
+	b.MouseButton1Click:Connect(cb)
+	return b
+end
+
+local function BuildUi()
+	DestroyUi()
+	local gui = Instance.new("ScreenGui")
+	gui.Name = CFG.Marker
+	gui.ResetOnSpawn = false
+	gui.DisplayOrder = 1000006
+	gui.IgnoreGuiInset = true
+	Parent(gui)
+	S.Gui = gui
+
+	local frame = Instance.new("Frame")
+	frame.Size = UDim2.new(0, U(168), 0, U(148))
+	frame.Position = UDim2.new(0, U(10), 0.32, 0)
+	frame.BackgroundColor3 = COL.bg
+	frame.BorderSizePixel = 1
+	frame.BorderColor3 = COL.line
+	frame.Active = true
+	frame.Parent = gui
+	S.Frame = frame
+
+	local title = Instance.new("TextLabel")
+	title.Size = UDim2.new(1, -U(8), 0, U(14))
+	title.Position = UDim2.new(0, U(4), 0, U(2))
+	title.BackgroundTransparency = 1
+	title.Font = Enum.Font.Code
+	title.TextSize = U(11)
+	title.TextColor3 = COL.fg
+	title.TextXAlignment = Enum.TextXAlignment.Left
+	title.Text = "CVT CAM v0.7 M"
+	title.Parent = frame
+
+	local y = U(18)
+	local h = U(18)
+	local gap = U(2)
+
+	MkBtn(frame, "ON / OFF", y, h, function()
+		S.Enabled = not S.Enabled
+		if not S.Enabled then
+			EndFovLock()
+			S.WasActive = false
+			S.Active = false
+		else
+			InitAnglesFromCam()
+		end
+		PublishState()
+		SetStatus(S.Enabled and ("on gate=" .. GATE) or "OFF")
+	end)
+	y = y + h + gap
+
+	local gates = { "FIRE", "GUN", "FP", "ALWAYS" }
+	MkBtn(frame, "GATE cycle", y, h, function()
+		local idx = 1
+		for i, g in ipairs(gates) do
+			if g == GATE then
+				idx = i
+				break
+			end
+		end
+		GATE = gates[(idx % #gates) + 1]
+		S.WasActive = false
+		EndFovLock()
+		InitAnglesFromCam()
+		PublishState()
+		SetStatus("gate=" .. GATE)
+	end)
+	y = y + h + gap
+
+	local halfW = UDim2.new(0.5, -U(5), 0, h)
+	local sMinus = MkBtn(frame, "SENS-", y, h, function()
+		CFG.MouseSens = math.max(0.001, CFG.MouseSens - 0.0005)
+		SetStatus(string.format("sens=%.4f", CFG.MouseSens))
+	end)
+	sMinus.Size = halfW
+	local sPlus = MkBtn(frame, "SENS+", y, h, function()
+		CFG.MouseSens = math.min(0.02, CFG.MouseSens + 0.0005)
+		SetStatus(string.format("sens=%.4f", CFG.MouseSens))
+	end)
+	sPlus.Size = halfW
+	sPlus.Position = UDim2.new(0.5, U(1), 0, y)
+	y = y + h + gap
+
+	MkBtn(frame, "RESYNC / SCAN", y, h, function()
+		FullScanPavBtn()
+		RefreshPavAim()
+		local lock = S.PavAim and IsPavLockingTarget() or false
+		S.PavLock = lock
+		InitAnglesFromCam()
+		SetStatus(string.format(
+			"aim=%s lock=%s fov=%s",
+			tostring(S.PavAim),
+			tostring(lock),
+			tostring(S.PavFovPx)
+		))
+	end)
+	y = y + h + gap
+
+	local status = Instance.new("TextLabel")
+	status.Size = UDim2.new(1, -U(8), 0, U(36))
+	status.Position = UDim2.new(0, U(4), 0, y)
+	status.BackgroundTransparency = 1
+	status.Font = Enum.Font.Code
+	status.TextSize = U(10)
+	status.TextColor3 = COL.dim
+	status.TextXAlignment = Enum.TextXAlignment.Left
+	status.TextYAlignment = Enum.TextYAlignment.Top
+	status.TextWrapped = true
+	status.Text = "Mobile: swipe R look\nlock=center FOV"
+	status.Parent = frame
+	S.Status = status
+end
+
+S.Stopped = false
+S.Enabled = true
+
+-- Touch look + UI drag + mouse fallback
+S.Conns.inputBegan = UIS.InputBegan:Connect(function(input, gp)
+	if S.Stopped or not S.Enabled then
+		return
+	end
+	if input.UserInputType == Enum.UserInputType.Touch then
+		local pos = input.Position
+		if PointOnFrame(pos) then
+			S.UiDragging = true
+			S.UiDragStart = pos
+			S.UiFramePos = S.Frame and S.Frame.Position or nil
+			return
+		end
+		if (S.Active or ShouldBeActive()) and InLookZone(pos) and not S.LookInput then
+			S.LookInput = input
+			return
+		end
+		-- other touch while active → soft FIRE for gate
+		if S.Active or ShouldBeActive() then
+			S.FireTouches = S.FireTouches + 1
+			S.Firing = true
+		end
+		return
+	end
+	if gp then
+		return
+	end
+	if input.UserInputType == Enum.UserInputType.MouseButton1 then
+		S.Firing = true
+	elseif input.UserInputType == Enum.UserInputType.MouseButton2 then
+		S.Aiming = true
+	end
+end)
+
+S.Conns.inputChanged = UIS.InputChanged:Connect(function(input)
+	if S.Stopped or not S.Enabled then
+		return
+	end
+	if input.UserInputType == Enum.UserInputType.Touch then
+		if S.UiDragging and S.UiDragStart and S.UiFramePos and S.Frame then
+			local d = input.Position - S.UiDragStart
+			S.Frame.Position = UDim2.new(
+				S.UiFramePos.X.Scale,
+				S.UiFramePos.X.Offset + d.X,
+				S.UiFramePos.Y.Scale,
+				S.UiFramePos.Y.Offset + d.Y
+			)
+			return
+		end
+		if S.LookInput and input == S.LookInput then
+			if S.Active or ShouldBeActive() then
+				S.MouseDX = S.MouseDX + input.Delta.X
+				S.MouseDY = S.MouseDY + input.Delta.Y
+			end
+			return
+		end
+		-- orphan touch move in look zone while active
+		if (S.Active or ShouldBeActive()) and not S.LookInput and InLookZone(input.Position) then
+			S.LookInput = input
+			S.MouseDX = S.MouseDX + input.Delta.X
+			S.MouseDY = S.MouseDY + input.Delta.Y
+		end
+		return
+	end
+	if input.UserInputType == Enum.UserInputType.MouseMovement then
+		if S.Active or ShouldBeActive() then
+			S.MouseDX = S.MouseDX + input.Delta.X
+			S.MouseDY = S.MouseDY + input.Delta.Y
+		end
+	end
+end)
+
+S.Conns.inputEnded = UIS.InputEnded:Connect(function(input)
+	if input.UserInputType == Enum.UserInputType.Touch then
+		if S.LookInput == input then
+			S.LookInput = nil
+		end
+		if S.UiDragging then
+			S.UiDragging = false
+			S.UiDragStart = nil
+			S.UiFramePos = nil
+		end
+		if S.FireTouches > 0 then
+			S.FireTouches = S.FireTouches - 1
+		end
+		if S.FireTouches <= 0 then
+			S.FireTouches = 0
+			-- keep Firing if mouse still down (emulator)
+			if not UIS:IsMouseButtonPressed(Enum.UserInputType.MouseButton1) then
+				S.Firing = false
+			end
+		end
+		return
+	end
+	if input.UserInputType == Enum.UserInputType.MouseButton1 then
+		S.Firing = false
+	elseif input.UserInputType == Enum.UserInputType.MouseButton2 then
+		S.Aiming = false
+	end
+end)
+
+S.Conns.stat = RS.Heartbeat:Connect(function()
+	if S.Stopped then
+		return
+	end
+	RefreshPavAim()
+	local now = os.clock()
+	if now - S.StatClock < 0.6 then
+		return
+	end
+	local dt = now - S.StatClock
+	S.StatClock = now
+	local kick = math.deg(S.Stats.kick / math.max(dt, 1e-3))
+	local wr = S.Stats.writes
+	local yd = S.Stats.yield
+	S.Stats.kick, S.Stats.writes, S.Stats.yield = 0, 0, 0
+	if not S.Enabled then
+		SetStatus("OFF")
+		return
+	end
+	SetStatus(string.format(
+		"%s%s aim=%s lk=%s\nk~%.0f wr=%d y=%d",
+		S.Active and "ACT" or "idle",
+		S.Yielding and "+YLD" or "",
+		S.PavAim and "ON" or "off",
+		S.PavLock and "Y" or "n",
+		kick,
+		wr,
+		yd
+	))
+end)
+
+BuildUi()
+BindHard()
+InitAnglesFromCam()
+task.defer(FullScanPavBtn)
+PublishState()
+print("[CVT CamCancel] v0.7 Mobile — swipe right to look; yield on PAV lock")
